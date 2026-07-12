@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a problem with the Matia Terraform provider
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** include API tokens, connection secrets, or other credentials anywhere in this issue — redact them from configs and logs.
+
+        For security vulnerabilities, do not open an issue; see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: input
+    id: provider-version
+    attributes:
+      label: Provider version
+      placeholder: "e.g. 0.1.0 (from `terraform version` or your lock file)"
+    validations:
+      required: true
+  - type: input
+    id: terraform-version
+    attributes:
+      label: Terraform version
+      placeholder: "e.g. 1.14.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: resource
+    attributes:
+      label: Affected resource(s)
+      multiple: true
+      options:
+        - matia_source
+        - matia_destination
+        - matia_integration
+        - matia_integration_schedule
+        - matia_integration_schema
+        - matia_hybrid_deployment_agent
+        - provider configuration
+        - other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Terraform configuration
+      description: Minimal configuration that reproduces the issue. Redact secrets.
+      render: hcl
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead, including the full error output if any. Redact secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. terraform apply
+        2. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug output
+      description: Relevant `TF_LOG=DEBUG` output if available. Redact secrets.
+      render: text

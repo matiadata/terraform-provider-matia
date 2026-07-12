@@ -1,0 +1,7 @@
+matia_api_token      = "eyJ..."
+matia_api_url        = "http://localhost:3001/v1"
+hybrid_agent_id      = "your-existing-agent-id"
+bigquery_project_id  = "your-gcp-project"
+bigquery_location    = "us"
+bigquery_private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+bigquery_client_email = "your-sa@your-project.iam.gserviceaccount.com"

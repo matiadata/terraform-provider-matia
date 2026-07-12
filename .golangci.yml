@@ -1,0 +1,202 @@
+version: "2"
+
+issues:
+  max-same-issues: 50
+  max-issues-per-linter: 0
+
+formatters:
+  enable:
+    - goimports # formats imports and groups them (std / external / local)
+    - golines # wraps long lines
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/matiadata/terraform-provider-matia
+    golines:
+      max-len: 120
+  exclusions:
+    generated: lax
+
+linters:
+  default: none
+  enable:
+    # --- correctness ---
+    - asasalint # pass []any as any in variadic func(...any)
+    - bidichk # dangerous unicode sequences
+    - bodyclose # HTTP response body must be closed
+    - canonicalheader # net/http.Header canonical form
+    - copyloopvar # loop variable copy (Go 1.22+)
+    - depguard # import allowlist/blocklist
+    - durationcheck # two durations multiplied together
+    - embeddedstructfieldcheck # forbids embedding sync.Mutex
+    - errcheck # unchecked errors
+    - errorlint # error wrapping (errors.Is / errors.As)
+    - fatcontext # contexts re-created inside loops
+    - gocheckcompilerdirectives # valid //go: directives
+    - gochecksumtype # exhaustive Go "sum types"
+    - ineffassign # assignments to variables that are never used
+    - loggercheck # key/value pairs for zap/logr/klog/kitlog
+    - makezero # slice declarations with non-zero initial length
+    - mirror # bytes/strings mirror patterns
+    - musttag # enforces field tags on (un)marshaled structs
+    - nilerr # returns nil even if error is not nil
+    - nilnesserr # checks err != nil but returns a different nil
+    - nilnil # simultaneous (nil, nil) return
+    - noctx # HTTP requests without context.Context
+    - predeclared # shadows Go predeclared identifiers
+    - reassign # package variable reassignment
+    - recvcheck # receiver type consistency
+    - rowserrcheck # sql.Rows.Err() must be checked
+    - sqlclosecheck # sql.Rows / sql.Stmt must be closed
+    - staticcheck # go vet on steroids
+    - unconvert # unnecessary type conversions
+    - unused # unused constants, variables, functions, types
+    - wastedassign # wasted assignment statements
+
+    # --- bugs & style ---
+    - asciicheck # non-ASCII identifiers
+    - errname # sentinel errors named Err*, error types named *Error
+    - exhaustive # exhaustive enum switch/map
+    - exptostd # golang.org/x/exp functions replaceable by std
+    - forcetypeassert # unchecked type assertions (provider SDK uses many)
+    - gocritic # broad diagnostics: bugs, perf, style
+    - govet # suspicious constructs (enable-all minus fieldalignment)
+    - iface # interface pollution
+    - intrange # for loops that could use integer range
+    - iotamixing # mixed iota and non-iota in const blocks
+    - mnd # magic numbers
+    - modernize # suggests modern Go idioms
+    - nakedret # naked returns
+    - nestif # deeply nested if statements
+    - nolintlint # ill-formed or unexplained nolint directives
+    - nonamedreturns # named returns (makes defers confusing)
+    - nosprintfhostport # Sprintf misused for host:port
+    - perfsprint # fmt.Sprintf replaceable by faster alternative
+    - unparam # unused function parameters
+    - usestdlibvars # prefer stdlib constants/variables
+    - usetesting # os.TempDir / os.Setenv replaceable by t.*
+    - whitespace # leading/trailing blank lines
+
+    # --- docs & comments ---
+    - godot # comments end in a period
+    - godoclint # godoc best practices
+
+    # --- test quality ---
+    - testableexamples # examples must have expected output
+    - testifylint # testify assertion mistakes
+    - tparallel # missing or misused t.Parallel()
+
+    # --- imports & modules ---
+    - gomoddirectives # replace/retract/exclude directives in go.mod
+    - goprintffuncname # printf-like functions end with f
+
+  settings:
+    depguard:
+      rules:
+        # Keep your SDK → Framework migration guardrails
+        "terraform-sdk-deprecated":
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
+              desc: "Use github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+            - pkg: "github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+              desc: "Use github.com/hashicorp/terraform-plugin-testing/helper/resource"
+            - pkg: "github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+              desc: "Use github.com/hashicorp/terraform-plugin-testing/terraform"
+            - pkg: "github.com/hashicorp/terraform-plugin-sdk/v2"
+              desc: "Use Terraform Plugin Framework (github.com/hashicorp/terraform-plugin-framework)"
+
+        # Steer everyone toward modern stdlib replacements
+        "deprecated-stdlib":
+          files:
+            - "!$test"
+          deny:
+            - pkg: "math/rand$"
+              desc: "Use math/rand/v2 instead, see https://go.dev/blog/randv2"
+            - pkg: "log$"
+              desc: "Use log/slog instead, see https://go.dev/blog/slog"
+
+    embeddedstructfieldcheck:
+      forbid-mutex: true # sync.Mutex must not be embedded
+
+    errcheck:
+      check-type-assertions: true # a := b.(T) must be checked
+
+    exhaustive:
+      check:
+        - switch
+        - map
+
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+
+    godoclint:
+      enable:
+        - no-unused-link
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # too strict; reorder structs manually when it matters
+      settings:
+        shadow:
+          strict: true
+
+    mnd:
+      ignored-functions:
+        - flag.Arg
+        - flag.Duration.*
+        - flag.Float.*
+        - flag.Int.*
+        - flag.Uint.*
+        - os.Chmod
+        - os.Mkdir.*
+        - os.OpenFile
+        - os.WriteFile
+
+    nakedret:
+      max-func-lines: 0 # never allow naked returns regardless of length
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-no-explanation: [golines] # line-length suppressions need no comment
+
+    perfsprint:
+      strconcat: false # string concat via + is fine
+
+    reassign:
+      patterns:
+        - ".*" # catch all package-level variable reassignment
+
+    staticcheck:
+      checks:
+        - all
+        - -ST1000 # missing package comment — too noisy
+        - -ST1016 # consistent receiver names — too opinionated
+        - -QF1008 # omit embedded field from selector — too opinionated
+
+    usetesting:
+      os-temp-dir: true
+
+  exclusions:
+    warn-unused: true # warn if an exclusion rule is never triggered
+    generated: lax
+    presets:
+      - std-error-handling # ignores common stdlib error-check patterns
+      - common-false-positives # ignores well-known noisy patterns
+    rules:
+      # test files: relax rules that are too noisy or irrelevant in tests
+      - path: '_test\.go'
+        linters:
+          - bodyclose # test HTTP servers don't need strict cleanup
+          - errcheck # test assertions handle errors differently
+          - forcetypeassert # type assertions in tests are usually intentional
+          - gosec # test helpers intentionally do insecure things
+          - noctx # test HTTP calls often skip context
+          - wrapcheck # test code doesn't need to wrap errors

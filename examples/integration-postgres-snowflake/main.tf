@@ -1,0 +1,169 @@
+terraform {
+  required_providers {
+    matia = {
+      source = "matiadata/matia"
+    }
+  }
+}
+
+provider "matia" {
+  api_token = var.matia_api_token
+  api_url   = var.matia_api_url
+}
+
+resource "matia_source" "postgres" {
+  name = "tf-dev-source-postgres"
+  type = "postgres"
+
+  connection_config = jsonencode({
+    hostname = var.postgres_hostname
+    port     = var.postgres_port
+    database = var.postgres_database
+    ssl      = var.postgres_ssl
+  })
+
+  connection_secrets = jsonencode({
+    username = var.postgres_username
+    password = var.postgres_password
+  })
+}
+
+resource "matia_destination" "snowflake" {
+  name = "tf-dev-destination-snowflake"
+  type = "snowflake"
+
+  connection_config = jsonencode({
+    account   = var.snowflake_account
+    database  = var.snowflake_database
+    warehouse = var.snowflake_warehouse
+    role      = var.snowflake_role
+    username  = var.snowflake_username
+  })
+
+  connection_secrets = jsonencode({
+    password = var.snowflake_password
+  })
+}
+
+resource "matia_integration" "postgres_to_snowflake" {
+  name               = "tf-dev-postgres-to-snowflake"
+  source_id          = matia_source.postgres.id
+  destination_id     = matia_destination.snowflake.id
+  destination_schema = var.destination_schema
+
+  source_settings = jsonencode({
+    incremental_mode = "Change Stream"
+    max_clients      = 4
+  })
+}
+
+resource "matia_integration_schedule" "postgres_to_snowflake" {
+  integration_id        = matia_integration.postgres_to_snowflake.id
+  replication_frequency = "manual"
+}
+
+resource "matia_integration_schema" "postgres_to_snowflake" {
+  integration_id = matia_integration.postgres_to_snowflake.id
+  config = jsonencode({
+    schemas = {
+      public = {
+        tables = {
+          users = {
+            enabled  = true
+            syncMode = "change_stream"
+          }
+        }
+      }
+    }
+  })
+}
+
+output "integration_id" {
+  description = "Matia integration ID (for manual runs and API validation)"
+  value       = matia_integration.postgres_to_snowflake.id
+}
+
+output "source_id" {
+  description = "Postgres source asset ID"
+  value       = matia_source.postgres.id
+}
+
+output "destination_id" {
+  description = "Snowflake destination asset ID"
+  value       = matia_destination.snowflake.id
+}
+
+variable "matia_api_token" {
+  type      = string
+  sensitive = true
+}
+
+variable "matia_api_url" {
+  type    = string
+  default = "https://api.matia.io/v1"
+}
+
+variable "postgres_hostname" {
+  type    = string
+  default = "localhost"
+}
+
+variable "postgres_port" {
+  type    = string
+  default = "5432"
+}
+
+variable "postgres_database" {
+  type    = string
+  default = "postgres"
+}
+
+variable "postgres_ssl" {
+  type    = bool
+  default = false
+}
+
+variable "postgres_username" {
+  type    = string
+  default = "postgres"
+}
+
+variable "postgres_password" {
+  type      = string
+  sensitive = true
+  default   = "postgres"
+}
+
+variable "snowflake_account" {
+  type = string
+}
+
+variable "snowflake_database" {
+  type    = string
+  default = "STANDARD_DATABASE"
+}
+
+variable "snowflake_warehouse" {
+  type    = string
+  default = "STANDARD_WAREHOUSE"
+}
+
+variable "snowflake_role" {
+  type    = string
+  default = "STANDARD_ROLE"
+}
+
+variable "snowflake_username" {
+  type = string
+}
+
+variable "snowflake_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "destination_schema" {
+  type        = string
+  description = "Snowflake schema for synced tables"
+  default     = "raw"
+}

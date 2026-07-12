@@ -1,0 +1,18 @@
+build
+dist
+terraform-provider-matia
+terraform.tfstate.*
+terraform.tfstate
+.terraform
+.terraform.tfstate.lock.info
+*.tfvars
+*.tfvars.json
+
+# Local dev overrides
+.terraformrc
+terraform.rc
+/tmp
+
+# Go workspace: local-only, never committed (per Go guidance; CI builds per-module)
+go.work
+go.work.sum

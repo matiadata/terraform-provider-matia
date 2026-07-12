@@ -1,0 +1,20 @@
+matia_api_token = "eyJ..."
+matia_api_url   = "http://localhost:3001/v1"
+
+hybrid_agent_id = "your-existing-agent-id"
+
+postgres_hostname = "localhost"
+postgres_port     = "5432"
+postgres_database = "postgres"
+postgres_ssl      = false
+postgres_username = "postgres"
+postgres_password = "postgres"
+
+snowflake_account   = "xy12345"
+snowflake_database  = "STANDARD_DATABASE"
+snowflake_warehouse = "STANDARD_WAREHOUSE"
+snowflake_role      = "STANDARD_ROLE"
+snowflake_username  = "tf_user"
+snowflake_password  = "secret"
+
+destination_schema = "raw"
