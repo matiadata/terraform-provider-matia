@@ -40,9 +40,9 @@ jobs:
             BEGIN { gsub(/\./, "\\.", ver); re = "^## \\[" ver "\\]" }
             /^## \[/ { if (found) exit; if ($0 ~ re) { found = 1 }; next }
             found { print }
-          ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
-          if [ -s release-notes.md ]; then
-            echo "Release body: $(wc -l < release-notes.md) lines from CHANGELOG for ${version}."
+          ' CHANGELOG.md | sed '/./,$!d' > "$RUNNER_TEMP/release-notes.md"
+          if [ -s "$RUNNER_TEMP/release-notes.md" ]; then
+            echo "Release body: $(wc -l < "$RUNNER_TEMP/release-notes.md") lines from CHANGELOG for ${version}."
           else
             echo "::warning::No CHANGELOG section for ${version}; release body will be empty."
           fi
@@ -50,7 +50,9 @@ jobs:
         with:
           # Keep in sync with the goreleaser version pinned in the justfile.
           version: 'v2.17.0'
-          args: release --clean --release-notes=release-notes.md
+          # Notes live outside the work tree: goreleaser aborts on a dirty tree,
+          # and an untracked release-notes.md in the repo root is enough to fail it.
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
