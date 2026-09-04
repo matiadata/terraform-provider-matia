@@ -53,7 +53,7 @@ func TestIntegrationsClient_CreateWithAgentID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	created, err := client.Integrations.Create(context.Background(), CreateIntegrationRequest{
 		SourceID:             sourceID,
 		DestinationID:        destID,
@@ -90,7 +90,7 @@ func TestIntegrationsClient_ModifyWithAgentID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	err := client.Integrations.Modify(context.Background(), integrationID, ModifyIntegrationRequest{
 		AgentID: agentID,
 	})
@@ -119,7 +119,7 @@ func TestIntegrationsClient_ModifyClearsAgentID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	err := client.Integrations.Modify(context.Background(), integrationID, ModifyIntegrationRequest{
 		AgentID: (*string)(nil),
 	})
@@ -184,7 +184,7 @@ func TestIntegrationsClient_CreateGetModifyDelete(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	ctx := context.Background()
 
 	created, err := client.Integrations.Create(ctx, CreateIntegrationRequest{
@@ -250,7 +250,7 @@ func TestIntegrationsClient_ModifyWithRetryRetriesIntegrationInCreation(t *testi
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	client.pollInterval = time.Millisecond
 	client.integrationOperationTimeout = time.Second
 	ctx := context.Background()
@@ -291,7 +291,7 @@ func TestIntegrationsClient_ModifyWithRetryTimesOutWhenIntegrationStaysInCreatio
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	client.pollInterval = time.Millisecond
 	client.integrationOperationTimeout = 100 * time.Millisecond
 	err := client.Integrations.ModifyWithRetry(context.Background(), integrationID, ModifyIntegrationRequest{
@@ -308,7 +308,7 @@ func TestIntegrationsClient_ModifyWithRetryRetriesTimedOutPatch(t *testing.T) {
 	const integrationID = "507f1f77bcf86cd799439011"
 
 	attempts := 0
-	client := NewMatiaClient("https://api.example.test/v1", "key")
+	client := newTestClient("https://api.example.test/v1")
 	client.pollInterval = time.Millisecond
 	client.integrationOperationTimeout = 5 * time.Second
 	client.HTTPClient = &http.Client{
@@ -355,7 +355,7 @@ func TestIntegrationsClient_DeleteNotFoundIsIdempotent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	err := client.Integrations.Delete(context.Background(), "missing")
 	require.ErrorIs(t, err, ErrIntegrationNotFound)
 }
@@ -375,7 +375,7 @@ func TestIntegrationsClient_DeleteTimeoutWhenAlreadyDeleted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	client.HTTPClient.Transport = funcRoundTripper(func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodDelete {
 			return nil, context.DeadlineExceeded
@@ -402,7 +402,7 @@ func TestIntegrationsClient_GetMissingID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.Integrations.Get(context.Background(), integrationID)
 	require.EqualError(t, err, "API response missing integration id")
 }
@@ -416,7 +416,7 @@ func TestIntegrationsClient_GetNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.Integrations.Get(context.Background(), "missing")
 	require.ErrorIs(t, err, ErrIntegrationNotFound)
 }
@@ -440,7 +440,7 @@ func TestIntegrationsClient_CreateFollowsUpWithGet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	integration, err := client.Integrations.Create(context.Background(), CreateIntegrationRequest{
 		SourceID:             "source-1",
 		DestinationID:        "dest-1",
@@ -525,7 +525,7 @@ func TestIntegrationsClient_GetUpdateSchemaConfig(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	ctx := context.Background()
 
 	got, err := client.Integrations.GetSchemaConfig(ctx, integrationID)
@@ -557,7 +557,7 @@ func TestIntegrationsClient_GetSchemaConfigNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.Integrations.GetSchemaConfig(context.Background(), integrationID)
 	require.ErrorIs(t, err, ErrIntegrationNotFound)
 }

@@ -58,7 +58,7 @@ func TestAssetsClient_CreateGetUpdateDelete(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	ctx := context.Background()
 
 	created, err := client.Assets.Create(ctx, CreateAssetRequest{
@@ -99,7 +99,7 @@ func TestAssetsClient_GetNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.Assets.Get(context.Background(), "missing")
 	require.ErrorIs(t, err, ErrAssetNotFound)
 }
@@ -119,7 +119,7 @@ func TestAssetsClient_DeleteTimeoutWhenAlreadyDeleted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	client.HTTPClient.Transport = funcRoundTripper(func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodDelete {
 			return nil, context.DeadlineExceeded
@@ -146,7 +146,7 @@ func TestAssetsClient_GetMissingID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.Assets.Get(context.Background(), assetID)
 	require.EqualError(
 		t,
@@ -164,7 +164,7 @@ func TestAssetsClient_DeleteNotFoundIsIdempotent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	err := client.Assets.Delete(context.Background(), "missing")
 	require.ErrorIs(t, err, ErrAssetNotFound)
 }
@@ -188,7 +188,7 @@ func TestAssetsClient_CreateFollowsUpWithGet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	asset, err := client.Assets.Create(context.Background(), CreateAssetRequest{
 		Name:           "tf-test",
 		Type:           "postgres",
@@ -199,6 +199,39 @@ func TestAssetsClient_CreateFollowsUpWithGet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, getCalls)
 	require.Equal(t, "warehouse", asset.Description)
+}
+
+func TestAssetsClient_CreateSurfacesIDWhenReadBackFails(t *testing.T) {
+	t.Parallel()
+
+	const assetID = "507f1f77bcf86cd799439011"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/assets":
+			_, _ = w.Write([]byte(`{"code":"success","data":{"id":"` + assetID + `"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/assets/"+assetID:
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL + "/v1")
+	_, err := client.Assets.Create(context.Background(), CreateAssetRequest{
+		Name:           "tf-test",
+		Type:           "postgres",
+		ConnectionType: "source",
+		Connection:     map[string]any{"hostname": "localhost"},
+		Owners:         []string{},
+	})
+
+	// The asset exists server-side; without the id in the error it is unrecoverable,
+	// because Terraform records no state for a failed create.
+	require.Error(t, err)
+	require.Contains(t, err.Error(), assetID)
+	require.Contains(t, err.Error(), "duplicate")
 }
 
 func TestAssetsClient_DecodeInternalAPIFailure(t *testing.T) {

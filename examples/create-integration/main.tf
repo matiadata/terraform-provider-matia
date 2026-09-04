@@ -16,10 +16,12 @@ resource "matia_source" "test" {
   type = "postgres"
 
   connection_config = jsonencode({
-    hostname = "host.docker.internal"
-    port     = "5432"
-    database = "postgres"
-    ssl      = false
+    hostname    = "host.docker.internal"
+    port        = "5432"
+    database    = "postgres"
+    ssl         = false
+    slot        = "matia_slot"
+    publication = "matia_pub"
   })
 
   connection_secrets = jsonencode({

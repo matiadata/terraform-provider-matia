@@ -1,0 +1,42 @@
+# git-cliff configuration - renders the customer-facing changelog from
+# Conventional Commits. Run at release time (prepare-release.yml). The header
+# must match CHANGELOG.md's so `--prepend` preserves prior sections without
+# duplicating it. No footer: comparison links would point at the private repo.
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this provider are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+body = """
+
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}\
+{% endfor %}
+{% endfor %}"""
+trim = true
+postprocessors = [{ pattern = '\n{3,}', replace = "\n\n" }]
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+protect_breaking_commits = true
+sort_commits = "oldest"
+tag_pattern = "v[0-9]*"
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^revert", group = "Changed" },
+  { message = "^(chore|ci|build|docs|test|style|refactor)", skip = true },
+  { message = ".*", skip = true },
+]

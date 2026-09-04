@@ -109,7 +109,11 @@ func (c *IntegrationsClient) Create(ctx context.Context, req CreateIntegrationRe
 		return nil, err
 	}
 
-	return c.Get(ctx, data.ID)
+	integration, err := c.Get(ctx, data.ID)
+	if err != nil {
+		return nil, createdButUnreadable("integration", data.ID, "Import it into state instead.", err)
+	}
+	return integration, nil
 }
 
 func (c *IntegrationsClient) Get(ctx context.Context, id string) (*Integration, error) {

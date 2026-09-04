@@ -17,3 +17,9 @@ resource "matia_integration_schema" "example" {
 variable "integration_id" {
   type = string
 }
+
+# The full discovered catalog - every table, column and primary key, including the ones
+# config does not declare.
+output "discovered_schema" {
+  value = jsondecode(matia_integration_schema.example.effective_schema)
+}

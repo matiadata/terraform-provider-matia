@@ -16,14 +16,14 @@ resource "matia_source" "mysql" {
   type = "mysql"
 
   connection_config = jsonencode({
-    hostname = "host.docker.internal"
-    port     = "3306"
-    database = "pocdb"
+    hostname = var.mysql_hostname
+    port     = var.mysql_port
+    database = var.mysql_database
   })
 
   connection_secrets = jsonencode({
-    username = "matia"
-    password = "matia"
+    username = var.mysql_username
+    password = var.mysql_password
   })
 }
 
@@ -102,6 +102,28 @@ variable "matia_api_url" {
   default = "https://api.matia.io/v1"
 }
 
+
+variable "mysql_hostname" {
+  type = string
+}
+
+variable "mysql_port" {
+  type = string
+}
+
+variable "mysql_database" {
+  type = string
+}
+
+variable "mysql_username" {
+  type = string
+}
+
+variable "mysql_password" {
+  type      = string
+  sensitive = true
+}
+
 variable "bigquery_project_id" {
   type = string
 }
@@ -123,5 +145,4 @@ variable "bigquery_client_email" {
 variable "destination_schema" {
   type        = string
   description = "BigQuery dataset for synced tables"
-  default     = "raw"
 }

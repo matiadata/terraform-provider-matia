@@ -111,7 +111,11 @@ func (c *AssetsClient) Create(ctx context.Context, req CreateAssetRequest) (*Ass
 		return nil, err
 	}
 
-	return c.Get(ctx, created.AssetID())
+	asset, err := c.Get(ctx, created.AssetID())
+	if err != nil {
+		return nil, createdButUnreadable("asset", created.AssetID(), "Remove it before retrying.", err)
+	}
+	return asset, nil
 }
 
 func (c *AssetsClient) Get(ctx context.Context, id string) (*Asset, error) {

@@ -1,7 +1,16 @@
-matia_api_token      = "eyJ..."
-matia_api_url        = "http://localhost:3001/v1"
-hybrid_agent_id      = "your-existing-agent-id"
-bigquery_project_id  = "your-gcp-project"
-bigquery_location    = "us"
-bigquery_private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+matia_api_token = "eyJ..."
+
+bigquery_project_id   = "your-gcp-project"
+bigquery_location     = "us"
+bigquery_private_key  = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 bigquery_client_email = "your-sa@your-project.iam.gserviceaccount.com"
+
+destination_schema = "your-destination-schema-in-bigquery"
+
+mysql_hostname = "your-mysql-hostname"
+mysql_port     = "your-mysql-port"
+mysql_database = "your-mysql-database"
+mysql_username = "your-mysql-username"
+mysql_password = "your-mysql-password"
+
+hybrid_agent_id = "your-existing-agent-id"

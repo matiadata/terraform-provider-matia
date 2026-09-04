@@ -21,10 +21,29 @@ A hybrid deployment agent for running Matia connectors in your environment.
 
 ### Optional
 
-- `description` (String) Optional description for the hybrid deployment agent.
+- `description` (String) Optional description for the hybrid deployment agent. Must be non-empty when set. The API does not return an unset description, so an imported agent has a null description.
 
 ### Read-Only
 
 - `created_at` (String) Timestamp when the agent was created.
 - `id` (String) Agent ID assigned by Matia.
-- `token` (String, Sensitive) One-time agent token returned on create. Use this to start the hybrid agent process.
+- `token` (String, Sensitive) One-time agent token returned on create. Use this to start the hybrid agent process. It is never returned afterwards, so it is null on an imported agent.
+
+## Import
+
+Import is supported using the following syntax:
+
+In Terraform v1.5.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `id` attribute, for example:
+
+```terraform
+import {
+  to = matia_hybrid_deployment_agent.example
+  id = "9b7c2f14-3e5a-4d8b-a1c6-5f0e8d2b7a43"
+}
+```
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import matia_hybrid_deployment_agent.example "9b7c2f14-3e5a-4d8b-a1c6-5f0e8d2b7a43"
+```

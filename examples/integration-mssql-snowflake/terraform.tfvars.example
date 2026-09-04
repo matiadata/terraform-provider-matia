@@ -1,13 +1,13 @@
 matia_api_token = "eyJ..."
 
-postgres_hostname    = "your-postgres-hostname"
-postgres_port        = "your-postgres-port"
-postgres_database    = "your-postgres-database"
-postgres_ssl         = false
-postgres_slot        = "matia_slot"
-postgres_publication = "matia_pub"
-postgres_username    = "your-postgres-username"
-postgres_password    = "your-postgres-password"
+mssql_hostname = "your-sqlserver-hostname"
+mssql_port     = "your-sqlserver-port"
+mssql_database = "your-sqlserver-database"
+mssql_tls      = true
+mssql_username = "your-sqlserver-username"
+mssql_password = "your-sqlserver-password"
+
+mssql_incremental_mode = "Change Stream"
 
 snowflake_account   = "your-snowflake-account"
 snowflake_database  = "your-snowflake-database"

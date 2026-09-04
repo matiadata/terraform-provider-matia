@@ -6,11 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matiadata/terraform-provider-matia/internal/provider/client"
 )
 
 func TestAccHybridDeploymentAgent_basic(t *testing.T) {
@@ -39,6 +45,151 @@ func TestAccHybridDeploymentAgent_basic(t *testing.T) {
 			},
 		},
 	})
+}
+
+// Import supplies no prior state and the API never returns the one-time token,
+// so the token is verified as null here rather than round-tripped. The agent
+// without a description covers the field the API omits entirely.
+func TestAccHybridDeploymentAgent_import(t *testing.T) {
+	const resourceName = "matia_hybrid_deployment_agent.test"
+
+	cases := []struct {
+		name        string
+		description string
+	}{
+		{name: "with description", description: "edge agent"},
+		{name: "without description", description: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			apiURL := testAccStartHybridDeploymentAgentServer(t)
+			apiToken := testAccAPIToken(t)
+			config := testAccHybridDeploymentAgentConfig(t, apiURL, "my-agent", tc.description)
+
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				CheckDestroy: testAccCheckAPIResourceDestroyed(
+					apiURL,
+					apiToken,
+					"/agent-gateway/hybrid-deployment-agents",
+					resourceName,
+				),
+				Steps: []resource.TestStep{
+					{
+						Config: config,
+					},
+					{
+						Config:                  config,
+						ResourceName:            resourceName,
+						ImportState:             true,
+						ImportStateVerify:       true,
+						ImportStateVerifyIgnore: []string{"token"},
+						ImportStateCheck: func(states []*terraform.InstanceState) error {
+							if len(states) != 1 {
+								return fmt.Errorf("expected 1 imported state, got %d", len(states))
+							}
+							if token, ok := states[0].Attributes["token"]; ok {
+								return fmt.Errorf("imported state has token %q, want none", token)
+							}
+							return nil
+						},
+					},
+					{
+						Config:          config,
+						ResourceName:    resourceName,
+						ImportState:     true,
+						ImportStateKind: resource.ImportBlockWithID,
+					},
+				},
+			})
+		})
+	}
+}
+
+func TestAccHybridDeploymentAgent_rejectsEmptyDescription(t *testing.T) {
+	apiURL := testAccStartHybridDeploymentAgentServer(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+provider "matia" {
+  api_token = %q
+  api_url   = %q
+}
+
+resource "matia_hybrid_deployment_agent" "test" {
+  name        = "my-agent"
+  description = ""
+}
+`, testAccAPIToken(t), apiURL),
+				ExpectError: regexp.MustCompile(`Attribute description string length must be at least 1`),
+			},
+		},
+	})
+}
+
+func TestHybridDeploymentAgentToModel_ImportHasNoTemplate(t *testing.T) {
+	t.Parallel()
+
+	model := hybridDeploymentAgentToModel(
+		&client.HybridDeploymentAgent{
+			ID:          "agent-1",
+			Name:        "my-agent",
+			Description: "edge agent",
+			CreatedAt:   "2026-06-12T10:00:00Z",
+		},
+		hybridDeploymentAgentModel{},
+	)
+
+	require.Equal(t, "agent-1", model.ID.ValueString())
+	require.Equal(t, "my-agent", model.Name.ValueString())
+	require.Equal(t, "edge agent", model.Description.ValueString())
+	require.Equal(t, "2026-06-12T10:00:00Z", model.CreatedAt.ValueString())
+	require.True(t, model.Token.IsNull())
+}
+
+func TestHybridDeploymentAgentToModel_ImportWithoutDescription(t *testing.T) {
+	t.Parallel()
+
+	model := hybridDeploymentAgentToModel(
+		&client.HybridDeploymentAgent{ID: "agent-1", Name: "my-agent"},
+		hybridDeploymentAgentModel{},
+	)
+
+	require.Equal(t, "my-agent", model.Name.ValueString())
+	require.True(t, model.Description.IsNull())
+}
+
+func TestHybridDeploymentAgentToModel_PrefersPlannedFieldsOverAPI(t *testing.T) {
+	t.Parallel()
+
+	model := hybridDeploymentAgentToModel(
+		&client.HybridDeploymentAgent{ID: "agent-1", Name: "renamed", Description: "renamed description"},
+		hybridDeploymentAgentModel{
+			Name:        types.StringValue("my-agent"),
+			Description: types.StringValue("edge agent"),
+		},
+	)
+
+	require.Equal(t, "my-agent", model.Name.ValueString())
+	require.Equal(t, "edge agent", model.Description.ValueString())
+}
+
+func TestHybridDeploymentAgentToModel_KeepsEmptyDescriptionFromLegacyState(t *testing.T) {
+	t.Parallel()
+
+	model := hybridDeploymentAgentToModel(
+		&client.HybridDeploymentAgent{ID: "agent-1", Name: "my-agent"},
+		hybridDeploymentAgentModel{Description: types.StringValue("")},
+	)
+
+	require.False(t, model.Description.IsNull())
+	require.Empty(t, model.Description.ValueString())
 }
 
 func testAccHybridDeploymentAgentConfig(t *testing.T, apiURL, name, description string) string {

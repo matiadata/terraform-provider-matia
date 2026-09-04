@@ -60,6 +60,7 @@ Full documentation for each resource is published on the [Terraform Registry](ht
 | [`examples/integration-postgres-snowflake/`](examples/integration-postgres-snowflake/)                               | Postgres -> Snowflake integration using cloud execution                 |
 | [`examples/integration-postgres-snowflake-existing-agent/`](examples/integration-postgres-snowflake-existing-agent/) | Postgres -> Snowflake hybrid integration using an existing agent        |
 | [`examples/integration-postgres-snowflake-create-agent/`](examples/integration-postgres-snowflake-create-agent/)     | Postgres -> Snowflake hybrid integration with a Terraform-created agent |
+| [`examples/integration-mssql-snowflake/`](examples/integration-mssql-snowflake/)                                     | SQL Server -> Snowflake integration using cloud execution               |
 | [`examples/integration-mysql-bigquery/`](examples/integration-mysql-bigquery/)                                       | MySQL -> BigQuery integration using cloud execution                     |
 | [`examples/integration-mysql-bigquery-existing-agent/`](examples/integration-mysql-bigquery-existing-agent/)         | MySQL -> BigQuery hybrid integration using an existing agent            |
 | [`examples/integration-mysql-bigquery-create-agent/`](examples/integration-mysql-bigquery-create-agent/)             | MySQL -> BigQuery hybrid integration with a Terraform-created agent     |

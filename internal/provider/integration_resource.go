@@ -8,6 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -38,7 +39,10 @@ type integrationModel struct {
 	Tags                    types.List   `tfsdk:"tags"`
 }
 
-var _ resource.Resource = &integrationResource{}
+var (
+	_ resource.Resource                = &integrationResource{}
+	_ resource.ResourceWithImportState = &integrationResource{}
+)
 
 func NewIntegrationResource() resource.Resource {
 	return &integrationResource{}
@@ -87,7 +91,7 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Computed:    true,
 			},
 			"source_id": schema.StringAttribute{
-				Description: "Matia source asset ID.",
+				Description: "Matia source asset ID. Changing this forces resource replacement.",
 				Required:    true,
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
@@ -97,7 +101,7 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				},
 			},
 			"destination_id": schema.StringAttribute{
-				Description: "Matia destination asset ID.",
+				Description: "Matia destination asset ID. Changing this forces resource replacement.",
 				Required:    true,
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
@@ -114,8 +118,10 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				},
 			},
 			"agent_id": schema.StringAttribute{
-				Description: "Hybrid deployment agent ID for running the integration in your environment.",
-				Optional:    true,
+				Description: "Hybrid deployment agent ID for running the integration in your environment. " +
+					"An imported integration keeps the agent the API reports, so write it into the configuration: " +
+					"omitting it plans the agent away and the next apply detaches the integration from it.",
+				Optional: true,
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -135,24 +141,34 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				},
 			},
 			"paused": schema.BoolAttribute{
-				Description: "When true, the integration is paused (disabled).",
-				Optional:    true,
-				Computed:    true,
-				Default:     booldefault.StaticBool(false),
+				Description: "When true, the integration is paused (disabled). " +
+					"Importing a paused integration keeps that value, so write it into the configuration: " +
+					"omitting it falls back to the default and the next apply resumes the integration.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
 			},
 			"source_settings": schema.StringAttribute{
-				Description: "Optional JSON object for advanced source settings passed to the Matia API.",
-				Optional:    true,
+				Description: "Optional JSON object for advanced source settings passed to the Matia API. " +
+					"The provider does not read these settings back, so they are null on an imported " +
+					"integration, and if the configuration sets them after import, the resulting update " +
+					"is rejected by the API unless it only sets customReports; use ignore_changes after import.",
+				Optional: true,
 			},
 			"destination_settings": schema.StringAttribute{
-				Description: "Optional JSON object for advanced destination settings passed to the Matia API.",
-				Optional:    true,
+				Description: "Optional JSON object for advanced destination settings passed to the Matia API. " +
+					"Changing this forces resource replacement. The provider does not read these settings " +
+					"back, so they are null on an imported integration and a configuration that sets them " +
+					"plans a replacement after import.",
+				Optional: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"tags": schema.ListAttribute{
-				Description: "Tag IDs to associate with the integration.",
+				Description: "Tag IDs to associate with the integration. Changing this forces resource " +
+					"replacement. The provider does not read tags back, so they are null on an imported " +
+					"integration and a configuration that sets them plans a replacement after import.",
 				Optional:    true,
 				ElementType: types.StringType,
 				PlanModifiers: []planmodifier.List{
@@ -270,6 +286,14 @@ func (r *integrationResource) Delete(ctx context.Context, req resource.DeleteReq
 	}
 }
 
+func (r *integrationResource) ImportState(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
 func buildCreateIntegrationRequest(
 	ctx context.Context,
 	plan integrationModel,
@@ -319,23 +343,20 @@ func buildCreateIntegrationRequest(
 	return req, diags
 }
 
+// Import runs Read with no prior state, so a user-set field falls back to the
+// API value when the template has none; a populated template still wins, per
+// the toModel template rule (P4) in internal-docs/CONTRIBUTING.md.
+func templateOrAPIString(template types.String, apiValue string) types.String {
+	if (template.IsUnknown() || template.IsNull()) && apiValue != "" {
+		return types.StringValue(apiValue)
+	}
+	if template.IsUnknown() {
+		return types.StringNull()
+	}
+	return template
+}
+
 func integrationToModel(integration *client.Integration, template integrationModel) *integrationModel {
-	name := template.Name
-	if (name.IsUnknown() || name.IsNull()) && integration.Name != "" {
-		name = types.StringValue(integration.Name)
-	} else if name.IsUnknown() {
-		name = types.StringNull()
-	}
-
-	onSchemaUpdate := template.OnSchemaUpdate
-	if onSchemaUpdate.IsUnknown() || onSchemaUpdate.IsNull() {
-		if integration.OnSchemaUpdate != "" {
-			onSchemaUpdate = types.StringValue(integration.OnSchemaUpdate)
-		} else if onSchemaUpdate.IsUnknown() {
-			onSchemaUpdate = types.StringNull()
-		}
-	}
-
 	agentID := types.StringNull()
 	if integration.AgentID != nil {
 		agentID = types.StringValue(*integration.AgentID)
@@ -343,12 +364,12 @@ func integrationToModel(integration *client.Integration, template integrationMod
 
 	return &integrationModel{
 		ID:                      types.StringValue(integration.ID),
-		Name:                    name,
-		SourceID:                template.SourceID,
-		DestinationID:           template.DestinationID,
-		DestinationSchema:       template.DestinationSchema,
+		Name:                    templateOrAPIString(template.Name, integration.Name),
+		SourceID:                templateOrAPIString(template.SourceID, integration.Source.ID),
+		DestinationID:           templateOrAPIString(template.DestinationID, integration.Destination.ID),
+		DestinationSchema:       templateOrAPIString(template.DestinationSchema, integration.DestinationSchema),
 		AgentID:                 agentID,
-		OnSchemaUpdate:          onSchemaUpdate,
+		OnSchemaUpdate:          templateOrAPIString(template.OnSchemaUpdate, integration.OnSchemaUpdate),
 		Paused:                  types.BoolValue(integration.Paused),
 		SourceSettingsJSON:      template.SourceSettingsJSON,
 		DestinationSettingsJSON: template.DestinationSettingsJSON,

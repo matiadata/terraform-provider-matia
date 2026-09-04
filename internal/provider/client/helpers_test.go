@@ -3,8 +3,12 @@ package client
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -62,10 +66,81 @@ func TestIsHTTPTimeoutError(t *testing.T) {
 	require.False(t, isHTTPTimeoutError(errors.New("connection refused")))
 }
 
+func syscallOpError(op string, err error) error {
+	return &net.OpError{Op: op, Net: "tcp", Err: os.NewSyscallError(op, err)}
+}
+
 func TestIsTransientNetworkError(t *testing.T) {
-	require.True(t, isTransientNetworkError(errors.New("connection reset by peer")))
+	require.True(t, isTransientNetworkError(syscallOpError("read", syscall.ECONNRESET)))
+	require.True(t, isTransientNetworkError(syscallOpError("write", syscall.EPIPE)))
+	require.True(t, isTransientNetworkError(syscallOpError("dial", syscall.ECONNREFUSED)))
 	require.True(t, isTransientNetworkError(testTimeoutError{}))
 	require.False(t, isTransientNetworkError(errors.New("invalid JSON")))
+}
+
+func TestRequestNeverReachedServer(t *testing.T) {
+	require.True(t, requestNeverReachedServer(syscallOpError("dial", syscall.ECONNREFUSED)))
+	require.True(t, requestNeverReachedServer(syscallOpError("dial", syscall.ETIMEDOUT)))
+	require.True(t, requestNeverReachedServer(&net.DNSError{Err: "no such host", IsNotFound: true}))
+	require.True(t, requestNeverReachedServer(&net.DNSError{Err: "server misbehaving", IsTemporary: true}))
+	require.True(t, requestNeverReachedServer(errors.New("net/http: TLS handshake timeout")))
+	require.False(t, requestNeverReachedServer(syscallOpError("read", syscall.ECONNRESET)))
+	require.False(t, requestNeverReachedServer(nil))
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+
+	delay, ok := parseRetryAfter("120", now)
+	require.True(t, ok)
+	require.Equal(t, 2*time.Minute, delay)
+
+	delay, ok = parseRetryAfter("  5  ", now)
+	require.True(t, ok)
+	require.Equal(t, 5*time.Second, delay)
+
+	delay, ok = parseRetryAfter(now.Add(30*time.Second).Format(http.TimeFormat), now)
+	require.True(t, ok)
+	require.Equal(t, 30*time.Second, delay)
+
+	// A date already in the past is honored as "retry now", not treated as absent.
+	delay, ok = parseRetryAfter(now.Add(-time.Hour).Format(http.TimeFormat), now)
+	require.True(t, ok)
+	require.Zero(t, delay)
+
+	for _, unusable := range []string{"", "   ", "-1", "soon", "1.5"} {
+		_, ok = parseRetryAfter(unusable, now)
+		require.False(t, ok, "value %q should not be usable", unusable)
+	}
+}
+
+func TestCreatedButUnreadable(t *testing.T) {
+	cause := errors.New("connection reset")
+	err := createdButUnreadable("asset", "asset-42", "Remove it before retrying.", cause)
+
+	require.ErrorIs(t, err, cause)
+	// The id is the whole point: without it the created resource is unrecoverable.
+	require.Contains(t, err.Error(), "asset-42")
+	require.Contains(t, err.Error(), "duplicate")
+}
+
+func TestShouldRetryNetworkError(t *testing.T) {
+	refused := syscallOpError("dial", syscall.ECONNREFUSED)
+	dialTimeout := syscallOpError("dial", syscall.ETIMEDOUT)
+	reset := syscallOpError("read", syscall.ECONNRESET)
+
+	require.True(t, shouldRetryNetworkError(http.MethodPost, refused), "refused never reached server: safe for POST")
+	require.True(t, shouldRetryNetworkError(http.MethodPost, dialTimeout), "dial timeout never reached server")
+	require.True(t, shouldRetryNetworkError(http.MethodGet, reset), "reset: retryable for idempotent methods")
+	require.False(t, shouldRetryNetworkError(http.MethodPost, reset), "reset must not replay a POST")
+	require.False(t, shouldRetryNetworkError(http.MethodGet, errors.New("invalid JSON")))
+}
+
+func TestShouldRetryStatus(t *testing.T) {
+	require.True(t, shouldRetryStatus(http.MethodPost, http.StatusTooManyRequests), "429 rejected pre-processing")
+	require.True(t, shouldRetryStatus(http.MethodDelete, http.StatusBadGateway))
+	require.False(t, shouldRetryStatus(http.MethodPost, http.StatusInternalServerError), "5xx unsafe for POST")
+	require.False(t, shouldRetryStatus(http.MethodGet, http.StatusBadRequest))
 }
 
 func TestIsRetryableHTTPStatus(t *testing.T) {

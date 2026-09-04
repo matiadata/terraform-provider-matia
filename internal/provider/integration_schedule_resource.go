@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -28,7 +29,10 @@ type integrationScheduleModel struct {
 	BaseTime             types.String `tfsdk:"base_time"`
 }
 
-var _ resource.Resource = &integrationScheduleResource{}
+var (
+	_ resource.Resource                = &integrationScheduleResource{}
+	_ resource.ResourceWithImportState = &integrationScheduleResource{}
+)
 
 func NewIntegrationScheduleResource() resource.Resource {
 	return &integrationScheduleResource{}
@@ -68,12 +72,26 @@ func (r *integrationScheduleResource) Schema(
 				},
 			},
 			"cron_expression": schema.StringAttribute{
-				Description: "Cron expression when replication_frequency is cron.",
-				Optional:    true,
+				Description: "Cron expression when replication_frequency is cron. " +
+					"Matia keeps its stored value when the configuration omits this, so removing " +
+					"the attribute after setting it leaves the schedule unchanged rather than clearing it. " +
+					"Once Terraform holds an expression in state, after an import or an earlier apply, " +
+					"switching replication_frequency to cron reuses it rather than requiring it again.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"base_time": schema.StringAttribute{
-				Description: "Base time for scheduled syncs.",
-				Optional:    true,
+				Description: "Base time for scheduled syncs. " +
+					"Matia keeps its stored value when the configuration omits this, so removing " +
+					"the attribute after setting it leaves the schedule unchanged rather than clearing it.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -172,6 +190,16 @@ func (r *integrationScheduleResource) Update(
 func (r *integrationScheduleResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
 }
 
+// The schedule lives on the integration rather than as its own API object, so
+// the import id is the integration id; Read then fills the rest from the API.
+func (r *integrationScheduleResource) ImportState(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	resource.ImportStatePassthroughID(ctx, path.Root("integration_id"), req, resp)
+}
+
 func (r *integrationScheduleResource) applySchedule(
 	ctx context.Context,
 	plan integrationScheduleModel,
@@ -222,7 +250,7 @@ func buildScheduleModifyRequest(plan integrationScheduleModel) (client.ModifyInt
 		return client.ModifyIntegrationRequest{}, diags
 	}
 
-	if frequency == "cron" && (plan.CronExpression.IsNull() || plan.CronExpression.ValueString() == "") {
+	if frequency == "cron" && !scheduleValueSet(plan.CronExpression) {
 		diags.AddError(
 			"Missing cron_expression",
 			"cron_expression is required when replication_frequency is cron.",
@@ -233,10 +261,10 @@ func buildScheduleModifyRequest(plan integrationScheduleModel) (client.ModifyInt
 		ReplicationFrequency: frequency,
 	}
 
-	if !plan.CronExpression.IsNull() && plan.CronExpression.ValueString() != "" {
+	if scheduleValueSet(plan.CronExpression) {
 		req.CronExpression = plan.CronExpression.ValueString()
 	}
-	if !plan.BaseTime.IsNull() && plan.BaseTime.ValueString() != "" {
+	if scheduleValueSet(plan.BaseTime) {
 		req.BaseTime = plan.BaseTime.ValueString()
 	}
 
@@ -280,32 +308,47 @@ func scheduleToModel(
 		)
 	}
 
-	cron := template.CronExpression
-	if integration.CronExpression != "" {
-		cron = types.StringValue(integration.CronExpression)
-	}
-
-	baseTime := template.BaseTime
-	if integration.BaseTime != "" {
-		baseTime = types.StringValue(integration.BaseTime)
-	}
-
 	return &integrationScheduleModel{
 		IntegrationID:        types.StringValue(integrationID),
 		ReplicationFrequency: frequency,
-		CronExpression:       cron,
-		BaseTime:             baseTime,
+		CronExpression:       scheduleValueForState(template.CronExpression, integration.CronExpression),
+		BaseTime:             scheduleValueForState(template.BaseTime, integration.BaseTime),
 	}
+}
+
+// These attributes are Computed, so the plan leaves them unknown whenever the
+// configuration omits them on create. Unknown is not a valid state value, so an
+// attribute the API reports nothing for has to land in state as null.
+//
+// An empty apiValue falls back to the planned/prior value rather than clearing
+// state, so a field cleared out of band is not detected as drift. Terraform
+// never clears one itself - the provider only ever omits a field, and an
+// omitted field leaves Matia's stored value untouched - but other clients can:
+// the Matia UI sends an explicit null, which the API honours.
+func scheduleValueForState(planned types.String, apiValue string) types.String {
+	if apiValue != "" {
+		return types.StringValue(apiValue)
+	}
+	if planned.IsUnknown() {
+		return types.StringNull()
+	}
+	return planned
+}
+
+// Unknown means the config is silent and no prior state filled the gap in, so
+// it carries no user value the API should be told about.
+func scheduleValueSet(planned types.String) bool {
+	return !planned.IsNull() && !planned.IsUnknown() && planned.ValueString() != ""
 }
 
 func schedulePlanFromModel(plan integrationScheduleModel) client.SchedulePlan {
 	schedulePlan := client.SchedulePlan{
 		ReplicationFrequency: plan.ReplicationFrequency.ValueString(),
 	}
-	if !plan.CronExpression.IsNull() && !plan.CronExpression.IsUnknown() {
+	if scheduleValueSet(plan.CronExpression) {
 		schedulePlan.CronExpression = plan.CronExpression.ValueString()
 	}
-	if !plan.BaseTime.IsNull() && !plan.BaseTime.IsUnknown() {
+	if scheduleValueSet(plan.BaseTime) {
 		schedulePlan.BaseTime = plan.BaseTime.ValueString()
 	}
 	return schedulePlan

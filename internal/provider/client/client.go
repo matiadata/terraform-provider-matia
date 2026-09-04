@@ -2,7 +2,6 @@ package client
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,6 +15,10 @@ const (
 
 	requestRetryMaxAttempts = 3
 	requestRetryBaseDelay   = 500 * time.Millisecond
+
+	// Ceiling on a server-supplied Retry-After, so an oversized value cannot stall an
+	// apply for minutes while Terraform holds the resource lock.
+	maxRetryAfterDelay = 30 * time.Second
 )
 
 // MatiaClient is the API client shared across all resources.
@@ -27,6 +30,7 @@ type MatiaClient struct {
 	Integrations           *IntegrationsClient
 	HybridDeploymentAgents *HybridDeploymentAgentsClient
 
+	retryBaseDelay                     time.Duration
 	pollInterval                       time.Duration
 	integrationOperationTimeout        time.Duration
 	integrationOperationAttemptTimeout time.Duration
@@ -39,6 +43,7 @@ func NewMatiaClient(baseURL, apiKey string) *MatiaClient {
 		HTTPClient: &http.Client{
 			Timeout: defaultHTTPTimeout,
 		},
+		retryBaseDelay:                     requestRetryBaseDelay,
 		pollInterval:                       defaultPollInterval,
 		integrationOperationTimeout:        defaultIntegrationOperationTimeout,
 		integrationOperationAttemptTimeout: defaultIntegrationOperationAttemptTimeout,
@@ -58,39 +63,46 @@ func (c *MatiaClient) doRequest(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	var lastErr error
-	for attempt := range requestRetryMaxAttempts {
+	var retryDelay time.Duration
+	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if err := resetRequestBody(req); err != nil {
 				return nil, err
 			}
-			time.Sleep(requestRetryDelay(attempt))
+			time.Sleep(retryDelay)
 		}
+		finalAttempt := attempt == requestRetryMaxAttempts-1
 
 		resp, err := c.HTTPClient.Do(req)
 		if err != nil {
-			if isTransientNetworkError(err) && attempt < requestRetryMaxAttempts-1 {
-				lastErr = err
-				continue
+			if finalAttempt || !shouldRetryNetworkError(req.Method, err) {
+				return nil, err
 			}
-			return nil, err
-		}
-
-		if isRetryableHTTPStatus(resp.StatusCode) && attempt < requestRetryMaxAttempts-1 {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			lastErr = fmt.Errorf("API request failed with status %d", resp.StatusCode)
+			retryDelay = c.backoffDelay(attempt + 1)
 			continue
 		}
 
-		return resp, nil
-	}
+		if finalAttempt || !shouldRetryStatus(req.Method, resp.StatusCode) {
+			return resp, nil
+		}
 
-	return nil, lastErr
+		retryDelay = c.retryDelayFor(resp, attempt+1)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
 }
 
-func requestRetryDelay(attempt int) time.Duration {
-	return requestRetryBaseDelay * time.Duration(1<<(attempt-1))
+func (c *MatiaClient) backoffDelay(attempt int) time.Duration {
+	return c.retryBaseDelay * time.Duration(1<<(attempt-1))
+}
+
+// retryDelayFor prefers the server's own Retry-After over local backoff, so a throttled
+// client waits as long as the limiter actually asked for.
+func (c *MatiaClient) retryDelayFor(resp *http.Response, attempt int) time.Duration {
+	if delay, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
+		return min(delay, maxRetryAfterDelay)
+	}
+	return c.backoffDelay(attempt)
 }
 
 func resetRequestBody(req *http.Request) error {

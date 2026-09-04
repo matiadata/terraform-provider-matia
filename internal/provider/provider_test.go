@@ -1,15 +1,37 @@
 package provider
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
 	"matia": providerserver.NewProtocol6WithError(New("test")()),
+}
+
+// testAccImportStateIDFunc reads the import identifier out of the resource's own
+// state. matia_integration_schedule and matia_integration_schema have no `id`
+// attribute, so the identifier the framework defaults to is the unusable
+// "id-attribute-not-set" sentinel; their import steps must pass the id
+// explicitly and set ImportStateVerifyIdentifierAttribute, which also
+// defaults to `id`.
+func testAccImportStateIDFunc(resourceName, attribute string) resource.ImportStateIdFunc {
+	return func(s *terraform.State) (string, error) {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return "", fmt.Errorf("%s not found in state", resourceName)
+		}
+		id := rs.Primary.Attributes[attribute]
+		if id == "" {
+			return "", fmt.Errorf("%s has no %s in state", resourceName, attribute)
+		}
+		return id, nil
+	}
 }
 
 func testAccPreCheck(t *testing.T) {

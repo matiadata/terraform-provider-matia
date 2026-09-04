@@ -40,7 +40,7 @@ func TestCreateHybridDeploymentAgent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	agent, err := client.HybridDeploymentAgents.Create(context.Background(), CreateHybridDeploymentAgentRequest{
 		Name:        "my-agent",
 		Description: "edge agent",
@@ -63,7 +63,7 @@ func TestCreateHybridDeploymentAgent_MissingID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.HybridDeploymentAgents.Create(context.Background(), CreateHybridDeploymentAgentRequest{
 		Name: "my-agent",
 	})
@@ -87,7 +87,7 @@ func TestGetHybridDeploymentAgent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	agent, err := client.HybridDeploymentAgents.Get(context.Background(), "agent-123")
 	require.NoError(t, err)
 	require.Equal(t, "agent-123", agent.ID)
@@ -104,7 +104,7 @@ func TestGetHybridDeploymentAgent_NotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.HybridDeploymentAgents.Get(context.Background(), "missing")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrHybridDeploymentAgentNotFound)
@@ -123,7 +123,7 @@ func TestGetHybridDeploymentAgent_SoftNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.HybridDeploymentAgents.Get(context.Background(), "missing")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrHybridDeploymentAgentNotFound)
@@ -139,7 +139,7 @@ func TestGetHybridDeploymentAgent_MissingID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	_, err := client.HybridDeploymentAgents.Get(context.Background(), "agent-123")
 	require.Error(t, err)
 	require.Equal(t, "API response missing hybrid deployment agent id", err.Error())
@@ -155,7 +155,7 @@ func TestDeleteHybridDeploymentAgent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	err := client.HybridDeploymentAgents.Delete(context.Background(), "agent-123")
 	require.NoError(t, err)
 }
@@ -177,7 +177,7 @@ func TestDeleteHybridDeploymentAgent_TimeoutThenNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	client.HTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			if req.Method == http.MethodDelete {
@@ -208,7 +208,7 @@ func TestDeleteHybridDeploymentAgent_TimeoutStillExists(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewMatiaClient(server.URL+"/v1", "key")
+	client := newTestClient(server.URL + "/v1")
 	client.HTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			if req.Method == http.MethodDelete {

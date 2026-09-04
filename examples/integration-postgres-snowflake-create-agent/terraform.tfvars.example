@@ -1,21 +1,22 @@
 matia_api_token = "eyJ..."
-matia_api_url   = "http://localhost:3001/v1"
 
-hybrid_agent_name        = "tf-dev-postgres-snowflake-hybrid-agent"
-hybrid_agent_description = "Hybrid agent for Postgres to Snowflake Terraform e2e"
+hybrid_agent_name        = "your-agent-name-to-create"
+hybrid_agent_description = "your-agent-description-to-create"
 
-postgres_hostname = "localhost"
-postgres_port     = "5432"
-postgres_database = "postgres"
-postgres_ssl      = false
-postgres_username = "postgres"
-postgres_password = "postgres"
+postgres_hostname    = "your-postgres-hostname"
+postgres_port        = "your-postgres-port"
+postgres_database    = "your-postgres-database"
+postgres_ssl         = false
+postgres_slot        = "matia_slot"
+postgres_publication = "matia_pub"
+postgres_username    = "your-postgres-username"
+postgres_password    = "your-postgres-password"
 
-snowflake_account   = "xy12345"
-snowflake_database  = "STANDARD_DATABASE"
-snowflake_warehouse = "STANDARD_WAREHOUSE"
-snowflake_role      = "STANDARD_ROLE"
-snowflake_username  = "tf_user"
-snowflake_password  = "secret"
+snowflake_account   = "your-snowflake-account"
+snowflake_database  = "your-snowflake-database"
+snowflake_warehouse = "your-snowflake-warehouse"
+snowflake_role      = "your-snowflake-role"
+snowflake_username  = "your-snowflake-username"
+snowflake_password  = "your-snowflake-password"
 
-destination_schema = "raw"
+destination_schema = "your-destination-schema-in-snowflake"

@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
           cache-dependency-path: |
@@ -33,11 +33,24 @@ jobs:
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
-      - uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
+      - name: Extract release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            BEGIN { gsub(/\./, "\\.", ver); re = "^## \\[" ver "\\]" }
+            /^## \[/ { if (found) exit; if ($0 ~ re) { found = 1 }; next }
+            found { print }
+          ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "Release body: $(wc -l < release-notes.md) lines from CHANGELOG for ${version}."
+          else
+            echo "::warning::No CHANGELOG section for ${version}; release body will be empty."
+          fi
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           # Keep in sync with the goreleaser version pinned in the justfile.
           version: 'v2.17.0'
-          args: release --clean
+          args: release --clean --release-notes=release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}

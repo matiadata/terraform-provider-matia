@@ -18,10 +18,12 @@ resource "matia_source" "postgres" {
   # The schema config below syncs public.users — create it in your source
   # database first, or point the config at an existing table.
   connection_config = jsonencode({
-    hostname = "host.docker.internal"
-    port     = "5432"
-    database = "postgres"
-    ssl      = false
+    hostname    = "host.docker.internal"
+    port        = "5432"
+    database    = "postgres"
+    ssl         = false
+    slot        = "matia_slot"
+    publication = "matia_pub"
   })
 
   connection_secrets = jsonencode({

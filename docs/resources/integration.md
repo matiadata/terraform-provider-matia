@@ -38,20 +38,39 @@ variable "destination_id" {
 
 ### Required
 
-- `destination_id` (String) Matia destination asset ID.
+- `destination_id` (String) Matia destination asset ID. Changing this forces resource replacement.
 - `destination_schema` (String) Destination schema path for synced data.
-- `source_id` (String) Matia source asset ID.
+- `source_id` (String) Matia source asset ID. Changing this forces resource replacement.
 
 ### Optional
 
-- `agent_id` (String) Hybrid deployment agent ID for running the integration in your environment.
-- `destination_settings` (String) Optional JSON object for advanced destination settings passed to the Matia API.
+- `agent_id` (String) Hybrid deployment agent ID for running the integration in your environment. An imported integration keeps the agent the API reports, so write it into the configuration: omitting it plans the agent away and the next apply detaches the integration from it.
+- `destination_settings` (String) Optional JSON object for advanced destination settings passed to the Matia API. Changing this forces resource replacement. The provider does not read these settings back, so they are null on an imported integration and a configuration that sets them plans a replacement after import.
 - `name` (String) Display name for the integration. When omitted, Matia assigns a default name.
 - `on_schema_update` (String) Schema change policy: enableAll, enableColumnChanges, enableNamespaceChanges, ignoreAll, or pauseConnection.
-- `paused` (Boolean) When true, the integration is paused (disabled).
-- `source_settings` (String) Optional JSON object for advanced source settings passed to the Matia API.
-- `tags` (List of String) Tag IDs to associate with the integration.
+- `paused` (Boolean) When true, the integration is paused (disabled). Importing a paused integration keeps that value, so write it into the configuration: omitting it falls back to the default and the next apply resumes the integration.
+- `source_settings` (String) Optional JSON object for advanced source settings passed to the Matia API. The provider does not read these settings back, so they are null on an imported integration, and if the configuration sets them after import, the resulting update is rejected by the API unless it only sets customReports; use ignore_changes after import.
+- `tags` (List of String) Tag IDs to associate with the integration. Changing this forces resource replacement. The provider does not read tags back, so they are null on an imported integration and a configuration that sets them plans a replacement after import.
 
 ### Read-Only
 
 - `id` (String) Integration ID assigned by Matia.
+
+## Import
+
+Import is supported using the following syntax:
+
+In Terraform v1.5.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `id` attribute, for example:
+
+```terraform
+import {
+  to = matia_integration.example
+  id = "6a4f30575d7e8a0ea5bbb790"
+}
+```
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import matia_integration.example "6a4f30575d7e8a0ea5bbb790"
+```

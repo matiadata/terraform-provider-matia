@@ -21,10 +21,12 @@ resource "matia_source" "postgres" {
   type = "postgres"
 
   connection_config = jsonencode({
-    hostname = var.postgres_hostname
-    port     = var.postgres_port
-    database = var.postgres_database
-    ssl      = var.postgres_ssl
+    hostname    = var.postgres_hostname
+    port        = var.postgres_port
+    database    = var.postgres_database
+    ssl         = var.postgres_ssl
+    slot        = var.postgres_slot
+    publication = var.postgres_publication
   })
 
   connection_secrets = jsonencode({
@@ -131,18 +133,15 @@ variable "hybrid_agent_description" {
 }
 
 variable "postgres_hostname" {
-  type    = string
-  default = "localhost"
+  type = string
 }
 
 variable "postgres_port" {
-  type    = string
-  default = "5432"
+  type = string
 }
 
 variable "postgres_database" {
-  type    = string
-  default = "postgres"
+  type = string
 }
 
 variable "postgres_ssl" {
@@ -150,15 +149,23 @@ variable "postgres_ssl" {
   default = false
 }
 
-variable "postgres_username" {
+variable "postgres_slot" {
   type    = string
-  default = "postgres"
+  default = "matia_slot"
+}
+
+variable "postgres_publication" {
+  type    = string
+  default = "matia_pub"
+}
+
+variable "postgres_username" {
+  type = string
 }
 
 variable "postgres_password" {
   type      = string
   sensitive = true
-  default   = "postgres"
 }
 
 variable "snowflake_account" {
@@ -166,18 +173,15 @@ variable "snowflake_account" {
 }
 
 variable "snowflake_database" {
-  type    = string
-  default = "STANDARD_DATABASE"
+  type = string
 }
 
 variable "snowflake_warehouse" {
-  type    = string
-  default = "STANDARD_WAREHOUSE"
+  type = string
 }
 
 variable "snowflake_role" {
-  type    = string
-  default = "STANDARD_ROLE"
+  type = string
 }
 
 variable "snowflake_username" {
@@ -192,5 +196,4 @@ variable "snowflake_password" {
 variable "destination_schema" {
   type        = string
   description = "Snowflake schema for synced tables"
-  default     = "raw"
 }

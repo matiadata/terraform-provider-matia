@@ -33,5 +33,26 @@ variable "integration_id" {
 
 ### Optional
 
-- `base_time` (String) Base time for scheduled syncs.
-- `cron_expression` (String) Cron expression when replication_frequency is cron.
+- `base_time` (String) Base time for scheduled syncs. Matia keeps its stored value when the configuration omits this, so removing the attribute after setting it leaves the schedule unchanged rather than clearing it.
+- `cron_expression` (String) Cron expression when replication_frequency is cron. Matia keeps its stored value when the configuration omits this, so removing the attribute after setting it leaves the schedule unchanged rather than clearing it. Once Terraform holds an expression in state, after an import or an earlier apply, switching replication_frequency to cron reuses it rather than requiring it again.
+
+## Import
+
+Import is supported using the following syntax:
+
+In Terraform v1.5.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `id` attribute, for example:
+
+```terraform
+# The schedule lives on the integration, so the import ID is the integration ID, not a schedule ID.
+import {
+  to = matia_integration_schedule.example
+  id = "6a4f30575d7e8a0ea5bbb790"
+}
+```
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# The schedule lives on the integration, so the import ID is the integration ID, not a schedule ID.
+terraform import matia_integration_schedule.example "6a4f30575d7e8a0ea5bbb790"
+```

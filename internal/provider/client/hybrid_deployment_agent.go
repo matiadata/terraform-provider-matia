@@ -79,7 +79,7 @@ func (c *HybridDeploymentAgentsClient) Create(
 
 	agent, err := c.Get(ctx, data.ID)
 	if err != nil {
-		return nil, err
+		return nil, createdButUnreadable("hybrid deployment agent", data.ID, "Import it into state instead.", err)
 	}
 
 	if data.Token != "" {

@@ -12,6 +12,3 @@ mysql_port     = "your-mysql-port"
 mysql_database = "your-mysql-database"
 mysql_username = "your-mysql-username"
 mysql_password = "your-mysql-password"
-
-hybrid_agent_name        = "your-agent-name-to-create"
-hybrid_agent_description = "your-agent-description-to-create"

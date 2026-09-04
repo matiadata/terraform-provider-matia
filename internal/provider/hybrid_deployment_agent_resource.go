@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -30,6 +31,7 @@ type hybridDeploymentAgentModel struct {
 
 var _ resource.Resource = &hybridDeploymentAgentResource{}
 var _ resource.ResourceWithConfigure = &hybridDeploymentAgentResource{}
+var _ resource.ResourceWithImportState = &hybridDeploymentAgentResource{}
 
 func NewHybridDeploymentAgentResource() resource.Resource {
 	return &hybridDeploymentAgentResource{}
@@ -87,8 +89,11 @@ func (r *hybridDeploymentAgentResource) Schema(
 				},
 			},
 			"description": schema.StringAttribute{
-				Description: "Optional description for the hybrid deployment agent.",
+				Description: "Optional description for the hybrid deployment agent. Must be non-empty when set. The API does not return an unset description, so an imported agent has a null description.",
 				Optional:    true,
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -98,7 +103,7 @@ func (r *hybridDeploymentAgentResource) Schema(
 				Computed:    true,
 			},
 			"token": schema.StringAttribute{
-				Description: "One-time agent token returned on create. Use this to start the hybrid agent process.",
+				Description: "One-time agent token returned on create. Use this to start the hybrid agent process. It is never returned afterwards, so it is null on an imported agent.",
 				Computed:    true,
 				Sensitive:   true,
 			},
@@ -193,10 +198,33 @@ func (r *hybridDeploymentAgentResource) Delete(
 	}
 }
 
+func (r *hybridDeploymentAgentResource) ImportState(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// Prior state wins for the user-set fields; the API fills them in only when
+// there is no prior state, which is what makes import work. Preferring state
+// masks out-of-band drift, and that is safe only while the agent gateway
+// exposes no update route (POST/GET/DELETE only). If a rename route is ever
+// added, Read must prefer the API instead.
 func hybridDeploymentAgentToModel(
 	agent *client.HybridDeploymentAgent,
 	template hybridDeploymentAgentModel,
 ) *hybridDeploymentAgentModel {
+	name := template.Name
+	if name.IsNull() && agent.Name != "" {
+		name = types.StringValue(agent.Name)
+	}
+
+	description := template.Description
+	if description.IsNull() && agent.Description != "" {
+		description = types.StringValue(agent.Description)
+	}
+
 	createdAt := template.CreatedAt
 	if agent.CreatedAt != "" {
 		createdAt = types.StringValue(agent.CreatedAt)
@@ -211,8 +239,8 @@ func hybridDeploymentAgentToModel(
 
 	return &hybridDeploymentAgentModel{
 		ID:          types.StringValue(agent.AgentID()),
-		Name:        template.Name,
-		Description: template.Description,
+		Name:        name,
+		Description: description,
 		CreatedAt:   createdAt,
 		Token:       token,
 	}

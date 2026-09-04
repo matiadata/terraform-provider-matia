@@ -11,8 +11,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/require"
 
@@ -26,7 +28,7 @@ func testAccIntegrationJSON(id, sourceID, destID, schema string, agentID ...*str
 	}
 
 	return fmt.Sprintf(
-		`{"code":"success","data":{"id":%q,"name":"tf-integration","paused":false,"source":{"id":%q,"name":"pg","type":"postgres"},"destination":{"id":%q,"name":"sf","type":"snowflake"},"replicationFrequency":"manual","destinationSchema":%q,"agentId":%s}}`,
+		`{"code":"success","data":{"id":%q,"name":"tf-integration","paused":false,"source":{"id":%q,"name":"pg","type":"postgres"},"destination":{"id":%q,"name":"sf","type":"snowflake"},"replicationFrequency":"manual","destinationSchema":%q,"onSchemaUpdate":"enableColumnChanges","agentId":%s}}`,
 		id,
 		sourceID,
 		destID,
@@ -57,6 +59,7 @@ func testAccApplySchedulePatch(
 			CronExpression       string                     `json:"cronExpression,omitempty"`
 			BaseTime             string                     `json:"baseTime,omitempty"`
 			DestinationSchema    string                     `json:"destinationSchema,omitempty"`
+			OnSchemaUpdate       string                     `json:"onSchemaUpdate,omitempty"`
 			AgentID              *string                    `json:"agentId"`
 		} `json:"data"`
 	}
@@ -75,6 +78,9 @@ func testAccApplySchedulePatch(
 	}
 	if req.DestinationSchema != "" {
 		envelope.Data.DestinationSchema = req.DestinationSchema
+	}
+	if req.OnSchemaUpdate != "" {
+		envelope.Data.OnSchemaUpdate = req.OnSchemaUpdate
 	}
 	if req.CronExpression != "" {
 		envelope.Data.CronExpression = req.CronExpression
@@ -103,14 +109,24 @@ func testAccApplySchedulePatch(
 type testAccIntegrationPatchHook func(id string, req client.ModifyIntegrationRequest, rawReq map[string]json.RawMessage)
 
 func testAccStartIntegrationsServer(t *testing.T) string {
-	return testAccStartIntegrationsServerWithPatchHook(t, nil)
+	return testAccStartIntegrationsServerWithSeeds(t, nil, nil)
 }
 
-func testAccStartIntegrationsServerWithPatchHook(t *testing.T, patchHook testAccIntegrationPatchHook) string {
+// seedSchedules pre-applies schedules to the given integration ids, modelling
+// integrations whose cronExpression/baseTime the API already owns before
+// Terraform manages them.
+func testAccStartIntegrationsServerWithSeeds(
+	t *testing.T,
+	patchHook testAccIntegrationPatchHook,
+	seedSchedules map[string]client.ModifyIntegrationRequest,
+) string {
 	t.Helper()
 
 	store := map[string]string{
 		"integration-1": testAccIntegrationJSON("integration-1", "source-1", "dest-1", "raw"),
+	}
+	for id, schedule := range seedSchedules {
+		store[id] = testAccApplySchedulePatch(testAccIntegrationJSON(id, "source-1", "dest-1", "raw"), schedule)
 	}
 	var mu sync.Mutex
 	nextID := 1
@@ -235,6 +251,173 @@ resource "matia_integration" "test" {
 	})
 }
 
+// The fields the GET returns round-trip on their own; tags and the two settings
+// blobs are never returned, so they are ignored here and asserted to be absent.
+func TestAccIntegration_import(t *testing.T) {
+	const resourceName = "matia_integration.test"
+
+	t.Run("fields the API returns", func(t *testing.T) {
+		apiURL := testAccStartIntegrationsServer(t)
+		apiToken := testAccAPIToken(t)
+		config := testAccProviderConfig(apiURL, apiToken) + `
+resource "matia_integration" "test" {
+  source_id          = "source-1"
+  destination_id     = "dest-1"
+  destination_schema = "raw"
+  on_schema_update   = "enableColumnChanges"
+}
+`
+
+		resource.Test(t, resource.TestCase{
+			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+			CheckDestroy: testAccCheckAPIResourceDestroyed(
+				apiURL,
+				apiToken,
+				"/integrations",
+				resourceName,
+			),
+			Steps: []resource.TestStep{
+				{
+					Config: config,
+				},
+				{
+					Config:            config,
+					ResourceName:      resourceName,
+					ImportState:       true,
+					ImportStateVerify: true,
+				},
+				{
+					Config:          config,
+					ResourceName:    resourceName,
+					ImportState:     true,
+					ImportStateKind: resource.ImportBlockWithID,
+				},
+			},
+		})
+	})
+
+	t.Run("fields the API does not return", func(t *testing.T) {
+		apiURL := testAccStartIntegrationsServer(t)
+		apiToken := testAccAPIToken(t)
+		config := testAccProviderConfig(apiURL, apiToken) + `
+resource "matia_integration" "test" {
+  source_id            = "source-1"
+  destination_id       = "dest-1"
+  destination_schema   = "raw"
+  source_settings      = jsonencode({ incremental_mode = "Full Refresh" })
+  destination_settings = jsonencode({ mode = "append" })
+  tags                 = ["tag-1"]
+}
+`
+
+		resource.Test(t, resource.TestCase{
+			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+			CheckDestroy: testAccCheckAPIResourceDestroyed(
+				apiURL,
+				apiToken,
+				"/integrations",
+				resourceName,
+			),
+			Steps: []resource.TestStep{
+				{
+					Config: config,
+				},
+				{
+					Config:                  config,
+					ResourceName:            resourceName,
+					ImportState:             true,
+					ImportStateVerify:       true,
+					ImportStateVerifyIgnore: []string{"source_settings", "destination_settings", "tags"},
+					ImportStateCheck: func(states []*terraform.InstanceState) error {
+						if len(states) != 1 {
+							return fmt.Errorf("expected 1 imported state, got %d", len(states))
+						}
+						for _, name := range []string{"source_settings", "destination_settings", "tags.#"} {
+							if value, ok := states[0].Attributes[name]; ok {
+								return fmt.Errorf("imported state has %s %q, want none", name, value)
+							}
+						}
+						return nil
+					},
+				},
+				{
+					Config:             config,
+					ResourceName:       resourceName,
+					ImportState:        true,
+					ImportStateKind:    resource.ImportBlockWithID,
+					ExpectNonEmptyPlan: true,
+					ImportPlanChecks: resource.ImportPlanChecks{
+						PreApply: []plancheck.PlanCheck{
+							plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionReplace),
+						},
+					},
+				},
+			},
+		})
+	})
+
+	t.Run("agent_id and paused", func(t *testing.T) {
+		apiURL := testAccStartIntegrationsServer(t)
+		apiToken := testAccAPIToken(t)
+		attached := testAccProviderConfig(apiURL, apiToken) + `
+resource "matia_integration" "test" {
+  source_id          = "source-1"
+  destination_id     = "dest-1"
+  destination_schema = "raw"
+  agent_id           = "agent-1"
+}
+`
+		// The stub reports every new integration as running, so pausing takes a
+		// second apply before there is a paused integration to import.
+		pausedAndAttached := testAccProviderConfig(apiURL, apiToken) + `
+resource "matia_integration" "test" {
+  source_id          = "source-1"
+  destination_id     = "dest-1"
+  destination_schema = "raw"
+  agent_id           = "agent-1"
+  paused             = true
+}
+`
+
+		resource.Test(t, resource.TestCase{
+			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+			CheckDestroy: testAccCheckAPIResourceDestroyed(
+				apiURL,
+				apiToken,
+				"/integrations",
+				resourceName,
+			),
+			Steps: []resource.TestStep{
+				{Config: attached},
+				{
+					Config: pausedAndAttached,
+					Check: resource.ComposeTestCheckFunc(
+						resource.TestCheckResourceAttr(resourceName, "agent_id", "agent-1"),
+						resource.TestCheckResourceAttr(resourceName, "paused", "true"),
+					),
+				},
+				{
+					Config:            pausedAndAttached,
+					ResourceName:      resourceName,
+					ImportState:       true,
+					ImportStateVerify: true,
+					ImportStateCheck: func(states []*terraform.InstanceState) error {
+						if len(states) != 1 {
+							return fmt.Errorf("expected 1 imported state, got %d", len(states))
+						}
+						for name, want := range map[string]string{"agent_id": "agent-1", "paused": "true"} {
+							if got := states[0].Attributes[name]; got != want {
+								return fmt.Errorf("imported %s = %q, want %q", name, got, want)
+							}
+						}
+						return nil
+					},
+				},
+			},
+		})
+	})
+}
+
 // CheckDestroy receives the pre-destroy state, so destruction is verified
 // against the backend: the resource's id must no longer resolve.
 func testAccCheckAPIResourceDestroyed(apiURL, apiToken, apiPath, resourceName string) resource.TestCheckFunc {
@@ -272,6 +455,8 @@ func testAccAPIGet(url, apiToken string) (*http.Response, error) {
 func TestIntegrationToModel_UsesTemplateFields(t *testing.T) {
 	t.Parallel()
 
+	plannedTags := types.ListValueMust(types.StringType, []attr.Value{types.StringValue("tag-1")})
+
 	model := integrationToModel(
 		&client.Integration{
 			ID:                "integration-1",
@@ -286,13 +471,65 @@ func TestIntegrationToModel_UsesTemplateFields(t *testing.T) {
 			DestinationID:           types.StringValue("dest-planned"),
 			DestinationSchema:       types.StringValue("planned-schema"),
 			SourceSettingsJSON:      types.StringValue(`{"key":"value"}`),
-			DestinationSettingsJSON: types.StringNull(),
+			DestinationSettingsJSON: types.StringValue(`{"mode":"append"}`),
+			Tags:                    plannedTags,
 		},
 	)
 	require.Equal(t, "planned-schema", model.DestinationSchema.ValueString())
 	require.Equal(t, types.StringValue(`{"key":"value"}`), model.SourceSettingsJSON)
+	require.Equal(t, types.StringValue(`{"mode":"append"}`), model.DestinationSettingsJSON)
+	require.Equal(t, plannedTags, model.Tags)
 	require.Equal(t, "source-planned", model.SourceID.ValueString())
 	require.Equal(t, "dest-planned", model.DestinationID.ValueString())
+}
+
+// Import supplies no prior state, so every field in the imported state has to
+// come from the API response.
+func TestIntegrationToModel_ImportHasNoTemplate(t *testing.T) {
+	t.Parallel()
+
+	agentID := "agent-api"
+	model := integrationToModel(
+		&client.Integration{
+			ID:                "integration-1",
+			Name:              "tf-integration",
+			Paused:            true,
+			Source:            client.IntegrationEndpoint{ID: "source-api"},
+			Destination:       client.IntegrationEndpoint{ID: "dest-api"},
+			DestinationSchema: "api-schema",
+			OnSchemaUpdate:    "enableColumnChanges",
+			AgentID:           &agentID,
+		},
+		integrationModel{},
+	)
+
+	require.Equal(t, "integration-1", model.ID.ValueString())
+	require.Equal(t, "tf-integration", model.Name.ValueString())
+	require.Equal(t, "source-api", model.SourceID.ValueString())
+	require.Equal(t, "dest-api", model.DestinationID.ValueString())
+	require.Equal(t, "api-schema", model.DestinationSchema.ValueString())
+	require.Equal(t, "enableColumnChanges", model.OnSchemaUpdate.ValueString())
+	require.Equal(t, "agent-api", model.AgentID.ValueString())
+	require.True(t, model.Paused.ValueBool())
+}
+
+// The API returns neither tags nor a faithful copy of the settings blobs, so an
+// imported integration leaves them null rather than inventing a value.
+func TestIntegrationToModel_ImportLeavesUnreturnedFieldsNull(t *testing.T) {
+	t.Parallel()
+
+	model := integrationToModel(
+		&client.Integration{
+			ID:          "integration-1",
+			Source:      client.IntegrationEndpoint{ID: "source-api"},
+			Destination: client.IntegrationEndpoint{ID: "dest-api"},
+		},
+		integrationModel{},
+	)
+
+	require.True(t, model.Tags.IsNull(), "tags = %v, want null", model.Tags)
+	require.True(t, model.SourceSettingsJSON.IsNull(), "source_settings = %v", model.SourceSettingsJSON)
+	require.True(t, model.DestinationSettingsJSON.IsNull(), "destination_settings = %v", model.DestinationSettingsJSON)
 }
 
 func TestIntegrationToModel_AgentIDFromAPI(t *testing.T) {
@@ -365,7 +602,7 @@ func TestAccIntegration_withAgentID(t *testing.T) {
 	var initialID string
 	var patchedAgentID string
 	var clearedAgentID bool
-	apiURL := testAccStartIntegrationsServerWithPatchHook(
+	apiURL := testAccStartIntegrationsServerWithSeeds(
 		t,
 		func(_ string, _ client.ModifyIntegrationRequest, rawReq map[string]json.RawMessage) {
 			rawAgentID, ok := rawReq["agentId"]
@@ -382,6 +619,7 @@ func TestAccIntegration_withAgentID(t *testing.T) {
 				patchedAgentID = agentID
 			}
 		},
+		nil,
 	)
 	apiToken := testAccAPIToken(t)
 

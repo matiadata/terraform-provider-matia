@@ -1,0 +1,1 @@
+terraform import matia_integration.example "6a4f30575d7e8a0ea5bbb790"

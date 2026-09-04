@@ -130,29 +130,24 @@ variable "hybrid_agent_description" {
 }
 
 variable "mysql_hostname" {
-  type    = string
-  default = "host.docker.internal"
+  type = string
 }
 
 variable "mysql_port" {
-  type    = string
-  default = "3306"
+  type = string
 }
 
 variable "mysql_database" {
-  type    = string
-  default = "pocdb"
+  type = string
 }
 
 variable "mysql_username" {
-  type    = string
-  default = "matia"
+  type = string
 }
 
 variable "mysql_password" {
   type      = string
   sensitive = true
-  default   = "matia"
 }
 
 variable "bigquery_project_id" {
@@ -176,5 +171,4 @@ variable "bigquery_client_email" {
 variable "destination_schema" {
   type        = string
   description = "BigQuery dataset for synced tables"
-  default     = "raw"
 }

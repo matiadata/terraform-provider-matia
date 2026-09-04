@@ -9,7 +9,10 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 func isHTTPTimeoutError(err error) bool {
@@ -34,21 +37,114 @@ func isTransientNetworkError(err error) bool {
 		return true
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if requestNeverReachedServer(err) {
 		return true
 	}
 
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "tls handshake timeout")
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
 }
 
 func isRetryableHTTPStatus(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
+}
+
+// isIdempotentMethod reports whether replaying method can be trusted not to create a
+// second resource.
+//
+// This is deliberately wider than net/http, which refuses to replay any body-carrying
+// request without an Idempotency-Key: idempotent-per-RFC and safe-to-replay-under-
+// concurrent-modification are different properties. Including PUT/DELETE/PATCH here
+// rests on Terraform being the sole writer of the resources it manages, which is the
+// assumption that breaks first - someone editing the same integration in the Matia
+// console mid-apply.
+//
+// PATCH qualifies only because every Matia PATCH is an absolute field/config set, not
+// an append/toggle; an append-style PATCH would have to be excluded so it is not
+// silently retried on a 5xx.
+func isIdempotentMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete, http.MethodPatch:
+		return true
+	default:
+		return false
+	}
+}
+
+// requestNeverReachedServer reports failures raised before any request byte reached the
+// server, so replaying them cannot duplicate a server-side effect.
+func requestNeverReachedServer(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Dial-phase failures - connection refused, connect timeout, most DNS failures -
+	// surface as an OpError with Op "dial"; the connection did not exist yet.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	// A resolver failure can also arrive unwrapped, e.g. from a custom dialer.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && (dnsErr.IsNotFound || dnsErr.IsTemporary) {
+		return true
+	}
+	// No errors.Is target for a TLS handshake timeout, so match its message.
+	return strings.Contains(strings.ToLower(err.Error()), "tls handshake timeout")
+}
+
+func shouldRetryNetworkError(method string, err error) bool {
+	if requestNeverReachedServer(err) {
+		return true
+	}
+	return isIdempotentMethod(method) && isTransientNetworkError(err)
+}
+
+func shouldRetryStatus(method string, statusCode int) bool {
+	if !isRetryableHTTPStatus(statusCode) {
+		return false
+	}
+	// Treating 429 as safe for any method assumes the request was rejected before the
+	// handler ran, which holds for an edge or gateway limiter. An app-level limiter
+	// that throttles after doing partial work would break this, and 429 would have to
+	// move into the idempotent-only branch below.
+	rejectedBeforeProcessing := statusCode == http.StatusTooManyRequests
+	return rejectedBeforeProcessing || isIdempotentMethod(method)
+}
+
+// parseRetryAfter reads an RFC 7231 Retry-After value, which is either delay-seconds or
+// an HTTP-date. The bool separates "no usable value" from a legitimate zero delay.
+func parseRetryAfter(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			return 0, false
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+
+	date, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	if delay := date.Sub(now); delay > 0 {
+		return delay, true
+	}
+	return 0, true
+}
+
+// createdButUnreadable reports a create the server accepted whose read-back failed.
+// Terraform records no id for a failed create, so the id has to reach the user in the
+// error text: a plain re-apply would create a second resource instead of adopting this
+// one.
+func createdButUnreadable(kind, id, recovery string, err error) error {
+	return fmt.Errorf(
+		"%s %q was created but could not be read back: %w; it exists on the server, "+
+			"so re-applying would create a duplicate. %s",
+		kind, id, err, recovery,
+	)
 }
 
 var (
@@ -60,6 +156,12 @@ const (
 	v1ErrorCodeSchemaNotFound      = "NotFound_SchemaConfig"
 	v1ErrorCodeTableNotFound       = "NotFound_TableConfig"
 )
+
+// SchemaNotFoundMessage opens the error a schemas PATCH naming an unknown schema produces. The
+// integration_schema resource quotes it when warning that a declared schema has left the catalog,
+// so that warning and the failure it predicts stay worded alike; the API's own SCHEMA_NOT_FOUND
+// code never reaches Terraform's output.
+const SchemaNotFoundMessage = "schema not found in integration catalog"
 
 var ReplicationFrequencyAliases = map[string]string{
 	"manual": "manual",
@@ -251,7 +353,7 @@ func errorFromV1NotFound(body []byte, notFoundErr error) error {
 		return notFoundErr
 	case v1ErrorCodeSchemaNotFound:
 		return fmt.Errorf(
-			"schema not found in integration catalog: %s (run GET /integrations/{id}/schemas to see discovered schemas)",
+			SchemaNotFoundMessage+": %s (run GET /integrations/{id}/schemas to see discovered schemas)",
 			message,
 		)
 	case v1ErrorCodeTableNotFound:
@@ -262,7 +364,7 @@ func errorFromV1NotFound(body []byte, notFoundErr error) error {
 	default:
 		if strings.Contains(message, "SchemaConfig") {
 			return fmt.Errorf(
-				"schema not found in integration catalog: %s (run GET /integrations/{id}/schemas to see discovered schemas)",
+				SchemaNotFoundMessage+": %s (run GET /integrations/{id}/schemas to see discovered schemas)",
 				message,
 			)
 		}
