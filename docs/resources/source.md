@@ -3,12 +3,12 @@
 page_title: "matia_source Resource - matia"
 subcategory: ""
 description: |-
-  A Matia source asset - a connector Matia reads data from.
+  A Matia source asset - a connector Matia reads data from. A Snowflake asset created on a backend with multipurpose support is multi_purpose, and its credentials cannot be changed through this resource: recreate it with terraform apply -replace. Use matia_asset for new multipurpose Snowflake assets.
 ---
 
 # matia_source (Resource)
 
-A Matia source asset - a connector Matia reads data from.
+A Matia source asset - a connector Matia reads data from. A Snowflake asset created on a backend with multipurpose support is multi_purpose, and its credentials cannot be changed through this resource: recreate it with terraform apply -replace. Use matia_asset for new multipurpose Snowflake assets.
 
 ## Example Usage
 

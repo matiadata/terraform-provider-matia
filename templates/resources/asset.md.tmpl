@@ -1,0 +1,47 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.RenderedProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+{{ if .HasExamples -}}
+## Example Usage
+
+{{- range .ExampleFiles }}
+
+{{ tffile . }}
+{{- end }}
+{{- end }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Credentials, state and import
+
+- Credentials are stored in Terraform state, marked sensitive. Matia never returns them, so state holds exactly what the configuration last applied.
+- Matia cannot change the credentials of an existing multipurpose asset. Any change to `credentials`, `etl`, `reverse_etl`, `catalog` or `etl_source`, including adding or removing a block, plans a replacement. Integrations that reference the asset are replaced with it.
+- After `terraform import`, the credentials blocks are null in state. The next apply records the configured blocks as-is, with a warning, and does not compare them with what Matia stores; no credentials are sent to the API.
+- `owners`, `tags` and `auth_method` are not read back by the provider, so they are null after import. The next apply re-sends configured `owners` and `auth_method`; a configuration that sets `tags` on an imported asset plans a replacement.
+- On a backend that supports multipurpose assets, every new Snowflake asset is created as `multi_purpose`, including those created with `matia_destination` or `matia_source`. Those resources keep working for existing assets; use `matia_asset` for new Snowflake assets.
+{{- if or .HasImport .HasImportIDConfig .HasImportIdentityConfig }}
+
+## Import
+
+Import is supported using the following syntax:
+{{- end }}
+{{- if .HasImportIDConfig }}
+
+In Terraform v1.5.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `id` attribute, for example:
+
+{{tffile .ImportIDConfigFile }}
+{{- end }}
+{{- if .HasImport }}
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+{{codefile "shell" .ImportFile }}
+{{- end }}

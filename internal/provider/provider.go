@@ -137,6 +137,7 @@ func (p *MatiaProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewHybridDeploymentAgentResource,
 		NewSourceResource,
 		NewDestinationResource,
+		NewMultiPurposeAssetResource,
 		NewIntegrationResource,
 		NewIntegrationScheduleResource,
 		NewIntegrationSchemaResource,

@@ -36,6 +36,8 @@ type integrationModel struct {
 	Paused                  types.Bool   `tfsdk:"paused"`
 	SourceSettingsJSON      types.String `tfsdk:"source_settings"`
 	DestinationSettingsJSON types.String `tfsdk:"destination_settings"`
+	DestinationDatabase     types.String `tfsdk:"destination_database"`
+	DestinationWarehouse    types.String `tfsdk:"destination_warehouse"`
 	Tags                    types.List   `tfsdk:"tags"`
 }
 
@@ -165,6 +167,31 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
+			"destination_database": schema.StringAttribute{
+				Description: "Snowflake database this integration loads into, chosen from the destination " +
+					"asset's default_database and additional_databases. Omit it on creation to use the " +
+					"default; once recorded, omitting it keeps the recorded selection. Changing it, or setting " +
+					"it on an integration that has none recorded, forces resource replacement: the API " +
+					"cannot move a synced integration.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIfConfigured(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"destination_warehouse": schema.StringAttribute{
+				Description: "Snowflake warehouse this integration runs on, chosen from the destination " +
+					"asset's default_warehouse and additional_warehouses. Omit it on creation to use the " +
+					"default; once recorded, omitting it keeps the recorded selection. Changing it, or setting " +
+					"it on an integration that has none recorded, forces resource replacement.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIfConfigured(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"tags": schema.ListAttribute{
 				Description: "Tag IDs to associate with the integration. Changing this forces resource " +
 					"replacement. The provider does not read tags back, so they are null on an imported " +
@@ -209,7 +236,7 @@ func (r *integrationResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	state := integrationToModel(integration, plan)
+	state := integrationToModel(integration, plan, preservePlanValue)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -237,7 +264,7 @@ func (r *integrationResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	newState := integrationToModel(integration, state)
+	newState := integrationToModel(integration, state, refreshFromAPI)
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
 
@@ -268,7 +295,7 @@ func (r *integrationResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	newState := integrationToModel(integration, plan)
+	newState := integrationToModel(integration, plan, preservePlanValue)
 	newState.ID = state.ID
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
@@ -311,6 +338,13 @@ func buildCreateIntegrationRequest(
 	var tagIDs []string
 	if !plan.Tags.IsNull() && !plan.Tags.IsUnknown() {
 		diags.Append(plan.Tags.ElementsAs(ctx, &tagIDs, false)...)
+	}
+
+	if !plan.DestinationDatabase.IsNull() && !plan.DestinationDatabase.IsUnknown() {
+		destinationSettings[client.SelectedDatabaseKey] = plan.DestinationDatabase.ValueString()
+	}
+	if !plan.DestinationWarehouse.IsNull() && !plan.DestinationWarehouse.IsUnknown() {
+		destinationSettings[client.SelectedWarehouseKey] = plan.DestinationWarehouse.ValueString()
 	}
 
 	enabled := !plan.Paused.ValueBool()
@@ -356,10 +390,43 @@ func templateOrAPIString(template types.String, apiValue string) types.String {
 	return template
 }
 
-func integrationToModel(integration *client.Integration, template integrationModel) *integrationModel {
+// readPolicy decides which side wins for an attribute the user configures and
+// the API echoes back. Read refreshes it from Matia, so an edit made outside
+// Terraform is planned away instead of being absorbed into state; Create and
+// Update keep the planned value, because the framework rejects an apply whose
+// result differs from its plan.
+type readPolicy bool
+
+const (
+	refreshFromAPI    readPolicy = true
+	preservePlanValue readPolicy = false
+)
+
+func configuredString(template types.String, apiValue string, policy readPolicy) types.String {
+	if policy == refreshFromAPI {
+		return apiStringOrNull(apiValue)
+	}
+	return templateOrAPIString(template, apiValue)
+}
+
+func integrationToModel(
+	integration *client.Integration,
+	template integrationModel,
+	policy readPolicy,
+) *integrationModel {
 	agentID := types.StringNull()
 	if integration.AgentID != nil {
 		agentID = types.StringValue(*integration.AgentID)
+	}
+	// An absent settings block carries no selection to refresh from, so the
+	// configured value stands rather than being cleared.
+	selectionPolicy := policy
+	if integration.DestinationSettings == nil {
+		selectionPolicy = preservePlanValue
+	}
+	var selection client.IntegrationDestinationSettings
+	if integration.DestinationSettings != nil {
+		selection = *integration.DestinationSettings
 	}
 
 	return &integrationModel{
@@ -373,7 +440,13 @@ func integrationToModel(integration *client.Integration, template integrationMod
 		Paused:                  types.BoolValue(integration.Paused),
 		SourceSettingsJSON:      template.SourceSettingsJSON,
 		DestinationSettingsJSON: template.DestinationSettingsJSON,
-		Tags:                    template.Tags,
+		DestinationDatabase: configuredString(
+			template.DestinationDatabase, selection.SelectedDatabase, selectionPolicy,
+		),
+		DestinationWarehouse: configuredString(
+			template.DestinationWarehouse, selection.SelectedWarehouse, selectionPolicy,
+		),
+		Tags: template.Tags,
 	}
 }
 

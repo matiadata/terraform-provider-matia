@@ -3,12 +3,12 @@
 page_title: "matia_destination Resource - matia"
 subcategory: ""
 description: |-
-  A Matia destination asset - a connector Matia writes data to.
+  A Matia destination asset - a connector Matia writes data to. A Snowflake asset created on a backend with multipurpose support is multi_purpose, and its credentials cannot be changed through this resource: recreate it with terraform apply -replace. Use matia_asset for new multipurpose Snowflake assets.
 ---
 
 # matia_destination (Resource)
 
-A Matia destination asset - a connector Matia writes data to.
+A Matia destination asset - a connector Matia writes data to. A Snowflake asset created on a backend with multipurpose support is multi_purpose, and its credentials cannot be changed through this resource: recreate it with terraform apply -replace. Use matia_asset for new multipurpose Snowflake assets.
 
 ## Example Usage
 

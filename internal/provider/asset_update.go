@@ -7,6 +7,36 @@ import (
 	"github.com/matiadata/terraform-provider-matia/internal/provider/client"
 )
 
+// applyAssetMetadataUpdate copies the changed name, description and auth method
+// into a PATCH body and reports whether anything changed. A removed description
+// is sent as "" so the API clears it.
+func applyAssetMetadataUpdate(
+	req *client.UpdateAssetRequest,
+	planName, stateName types.String,
+	planDescription, stateDescription types.String,
+	planAuthMethod, stateAuthMethod types.String,
+) bool {
+	changed := false
+
+	if !planName.Equal(stateName) && !planName.IsNull() {
+		req.Name = planName.ValueString()
+		changed = true
+	}
+
+	if !planDescription.Equal(stateDescription) {
+		description := planDescription.ValueString()
+		req.Description = &description
+		changed = true
+	}
+
+	if !planAuthMethod.Equal(stateAuthMethod) && !planAuthMethod.IsNull() {
+		req.AuthMethod = planAuthMethod.ValueString()
+		changed = true
+	}
+
+	return changed
+}
+
 func buildAssetUpdateRequest(
 	planName, stateName types.String,
 	planDescription, stateDescription types.String,
@@ -16,26 +46,13 @@ func buildAssetUpdateRequest(
 ) (client.UpdateAssetRequest, bool, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	var req client.UpdateAssetRequest
-	changed := false
 
-	if !planName.Equal(stateName) && !planName.IsNull() {
-		req.Name = planName.ValueString()
-		changed = true
-	}
-
-	if !planDescription.Equal(stateDescription) {
-		if planDescription.IsNull() {
-			req.Description = ""
-		} else {
-			req.Description = planDescription.ValueString()
-		}
-		changed = true
-	}
-
-	if !planAuthMethod.Equal(stateAuthMethod) && !planAuthMethod.IsNull() {
-		req.AuthMethod = planAuthMethod.ValueString()
-		changed = true
-	}
+	changed := applyAssetMetadataUpdate(
+		&req,
+		planName, stateName,
+		planDescription, stateDescription,
+		planAuthMethod, stateAuthMethod,
+	)
 
 	connectionChanged := !planConnectionConfig.Equal(stateConnectionConfig)
 

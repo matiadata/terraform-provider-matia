@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -21,6 +22,10 @@ import (
 )
 
 type assetKind string
+
+const multiPurposeSnowflakeNote = " A Snowflake asset created on a backend with multipurpose support is " +
+	"multi_purpose, and its credentials cannot be changed through this resource: recreate it with " +
+	"terraform apply -replace. Use matia_asset for new multipurpose Snowflake assets."
 
 const (
 	assetKindSource      assetKind = "source"
@@ -84,7 +89,7 @@ func (r *assetResource) schemaText() assetSchemaText {
 	switch r.kind {
 	case assetKindSource:
 		return assetSchemaText{
-			resourceDesc:      "A Matia source asset - a connector Matia reads data from.",
+			resourceDesc:      "A Matia source asset - a connector Matia reads data from." + multiPurposeSnowflakeNote,
 			name:              "The display name of the source asset.",
 			assetType:         "The connector type (e.g. postgres, salesforce). Changing this forces resource replacement.",
 			description:       "A human-readable description of the source asset.",
@@ -93,7 +98,7 @@ func (r *assetResource) schemaText() assetSchemaText {
 		}
 	case assetKindDestination:
 		return assetSchemaText{
-			resourceDesc:      "A Matia destination asset - a connector Matia writes data to.",
+			resourceDesc:      "A Matia destination asset - a connector Matia writes data to." + multiPurposeSnowflakeNote,
 			name:              "The display name of the destination asset.",
 			assetType:         "The connector type (e.g. snowflake, bigquery). Changing this forces resource replacement.",
 			description:       "A human-readable description of the destination asset.",
@@ -295,6 +300,15 @@ func (r *assetResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
+	credentialsChanged := !plan.ConnectionConfig.Equal(state.ConnectionConfig) ||
+		!config.ConnectionSecrets.Equal(state.ConnectionSecrets)
+	if credentialsChanged {
+		resp.Diagnostics.Append(r.refuseMultiPurposeCredentialsUpdate(ctx, state.ID.ValueString())...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	if changed {
 		if err := r.client.Assets.Update(ctx, state.ID.ValueString(), updateReq); err != nil {
 			resp.Diagnostics.AddError(fmt.Sprintf("Failed to update %s", r.kind), err.Error())
@@ -328,4 +342,30 @@ func (r *assetResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	if err != nil && !errors.Is(err, client.ErrAssetNotFound) {
 		resp.Diagnostics.AddError(fmt.Sprintf("Failed to delete %s", r.kind), err.Error())
 	}
+}
+
+// A backend with multipurpose support creates every Snowflake asset as
+// multi_purpose, and a flat connection PATCH on such an asset returns 200 while
+// writing nothing. Refusing it keeps state honest about the credentials Matia holds.
+func (r *assetResource) refuseMultiPurposeCredentialsUpdate(ctx context.Context, id string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	asset, err := r.client.Assets.Get(ctx, id)
+	if err != nil {
+		diags.AddError(fmt.Sprintf("Failed to read %s before update", r.kind), err.Error())
+		return diags
+	}
+	if asset.ConnectionType == multiPurposeConnectionType {
+		diags.AddError(
+			"Credentials of a multipurpose asset cannot be changed here",
+			fmt.Sprintf(
+				"Asset %q is multi_purpose, and the Matia API ignores a flat connection update on it. "+
+					"Either revert connection_config and connection_secrets, or recreate the asset with "+
+					"terraform apply -replace, which does apply the new credentials. matia_asset is for "+
+					"new multipurpose assets: importing this one records the configured credentials in "+
+					"Terraform state without sending them to Matia.",
+				id,
+			),
+		)
+	}
+	return diags
 }

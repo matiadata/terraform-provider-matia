@@ -24,22 +24,48 @@ type AssetOwner struct {
 	ID string `json:"_id"`
 }
 
+// AssetEtlResources is the ETL block a multi-purpose Snowflake asset publishes:
+// the credentials' own database and warehouse plus the additional ones an
+// integration may select instead.
+type AssetEtlResources struct {
+	DefaultDatabase      string   `json:"defaultDatabase,omitempty"`
+	DefaultWarehouse     string   `json:"defaultWarehouse,omitempty"`
+	AdditionalDatabases  []string `json:"additionalDatabases"`
+	AdditionalWarehouses []string `json:"additionalWarehouses"`
+}
+
+type AssetConfiguration struct {
+	Etl *AssetEtlResources `json:"etl,omitempty"`
+}
+
+// AssetEtlConfigurationRequest is the writable half of AssetEtlResources. A nil
+// list leaves that list untouched; an empty list clears it.
+type AssetEtlConfigurationRequest struct {
+	AdditionalDatabases  *[]string `json:"additionalDatabases,omitempty"`
+	AdditionalWarehouses *[]string `json:"additionalWarehouses,omitempty"`
+}
+
+type AssetConfigurationRequest struct {
+	Etl *AssetEtlConfigurationRequest `json:"etl,omitempty"`
+}
+
 // Asset mirrors the fields returned by the Matia assets API that the provider uses.
 type Asset struct {
-	ID             string         `json:"_id"`
-	AltID          string         `json:"id"`
-	Name           string         `json:"name"`
-	Description    string         `json:"description"`
-	Type           string         `json:"type"`
-	IsConnected    bool           `json:"isConnected"`
-	IsDraft        bool           `json:"isDraft"`
-	ConnectionID   string         `json:"connectionId"`
-	ConnectionType string         `json:"connectionType"`
-	AuthMethod     string         `json:"authMethod,omitempty"`
-	Connection     map[string]any `json:"connection,omitempty"`
-	Owners         []AssetOwner   `json:"owners"`
-	CreatedAt      string         `json:"createdAt"`
-	UpdatedAt      string         `json:"updatedAt"`
+	ID             string              `json:"_id"`
+	AltID          string              `json:"id"`
+	Name           string              `json:"name"`
+	Description    string              `json:"description"`
+	Type           string              `json:"type"`
+	IsConnected    bool                `json:"isConnected"`
+	IsDraft        bool                `json:"isDraft"`
+	ConnectionID   string              `json:"connectionId"`
+	ConnectionType string              `json:"connectionType"`
+	AuthMethod     string              `json:"authMethod,omitempty"`
+	Connection     map[string]any      `json:"connection,omitempty"`
+	Configuration  *AssetConfiguration `json:"configuration,omitempty"`
+	Owners         []AssetOwner        `json:"owners"`
+	CreatedAt      string              `json:"createdAt"`
+	UpdatedAt      string              `json:"updatedAt"`
 }
 
 func (a *Asset) AssetID() string {
@@ -57,25 +83,32 @@ func (a *Asset) OwnerIDs() []string {
 	return ids
 }
 
-// CreateAssetRequest is the POST /v1/assets body for sources and destinations.
+// CreateAssetRequest is the POST /v1/assets body. Sources and destinations set
+// ConnectionType; a multi-purpose Snowflake asset omits it and carries either a
+// shared Connection plus ConnectionOverrides or one Connection block per purpose.
 type CreateAssetRequest struct {
-	Name           string         `json:"name"`
-	Type           string         `json:"type"`
-	Description    string         `json:"description,omitempty"`
-	Connection     map[string]any `json:"connection"`
-	ConnectionType string         `json:"connectionType"`
-	Owners         []string       `json:"owners"`
-	AuthMethod     string         `json:"authMethod,omitempty"`
-	Tags           []string       `json:"tags,omitempty"`
+	Name                string                     `json:"name"`
+	Type                string                     `json:"type"`
+	Description         string                     `json:"description,omitempty"`
+	Connection          map[string]any             `json:"connection"`
+	ConnectionOverrides map[string]any             `json:"connectionOverrides,omitempty"`
+	ConnectionType      string                     `json:"connectionType,omitempty"`
+	Owners              []string                   `json:"owners"`
+	AuthMethod          string                     `json:"authMethod,omitempty"`
+	Tags                []string                   `json:"tags,omitempty"`
+	Configuration       *AssetConfigurationRequest `json:"configuration,omitempty"`
 }
 
-// UpdateAssetRequest is the PATCH /v1/assets/:id body.
+// UpdateAssetRequest is the PATCH /v1/assets/:id body. Description and Owners
+// are pointers so that clearing them ("" and []) is distinguishable from
+// leaving them untouched (nil, omitted from the body).
 type UpdateAssetRequest struct {
-	Name        string         `json:"name,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Connection  map[string]any `json:"connection,omitempty"`
-	AuthMethod  string         `json:"authMethod,omitempty"`
-	Owners      []string       `json:"owners,omitempty"`
+	Name          string                     `json:"name,omitempty"`
+	Description   *string                    `json:"description,omitempty"`
+	Connection    map[string]any             `json:"connection,omitempty"`
+	AuthMethod    string                     `json:"authMethod,omitempty"`
+	Owners        *[]string                  `json:"owners,omitempty"`
+	Configuration *AssetConfigurationRequest `json:"configuration,omitempty"`
 }
 
 func (c *AssetsClient) Create(ctx context.Context, req CreateAssetRequest) (*Asset, error) {

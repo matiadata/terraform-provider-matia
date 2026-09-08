@@ -26,20 +26,36 @@ type IntegrationEndpoint struct {
 	Type string `json:"type"`
 }
 
+// IntegrationDestinationSettings holds the destination settings the API reads
+// back. The API publishes them for several destination types; only the Snowflake
+// selection is decoded here, so a non-nil value does not imply a Snowflake
+// destination.
+type IntegrationDestinationSettings struct {
+	SelectedDatabase  string `json:"selectedDatabase,omitempty"`
+	SelectedWarehouse string `json:"selectedWarehouse,omitempty"`
+}
+
+// Keys of the Snowflake selection inside a create request's destinationSettings.
+const (
+	SelectedDatabaseKey  = "selectedDatabase"
+	SelectedWarehouseKey = "selectedWarehouse"
+)
+
 // Integration mirrors GET /v1/integrations/:id.
 type Integration struct {
-	ID                   string              `json:"id"`
-	Name                 string              `json:"name"`
-	Paused               bool                `json:"paused"`
-	Source               IntegrationEndpoint `json:"source"`
-	Destination          IntegrationEndpoint `json:"destination"`
-	CreatedAt            string              `json:"createdAt,omitempty"`
-	ReplicationFrequency string              `json:"replicationFrequency,omitempty"`
-	CronExpression       string              `json:"cronExpression,omitempty"`
-	BaseTime             string              `json:"baseTime,omitempty"`
-	DestinationSchema    string              `json:"destinationSchema,omitempty"`
-	OnSchemaUpdate       string              `json:"onSchemaUpdate,omitempty"`
-	AgentID              *string             `json:"agentId"`
+	ID                   string                          `json:"id"`
+	Name                 string                          `json:"name"`
+	Paused               bool                            `json:"paused"`
+	Source               IntegrationEndpoint             `json:"source"`
+	Destination          IntegrationEndpoint             `json:"destination"`
+	CreatedAt            string                          `json:"createdAt,omitempty"`
+	ReplicationFrequency string                          `json:"replicationFrequency,omitempty"`
+	CronExpression       string                          `json:"cronExpression,omitempty"`
+	BaseTime             string                          `json:"baseTime,omitempty"`
+	DestinationSchema    string                          `json:"destinationSchema,omitempty"`
+	OnSchemaUpdate       string                          `json:"onSchemaUpdate,omitempty"`
+	AgentID              *string                         `json:"agentId"`
+	DestinationSettings  *IntegrationDestinationSettings `json:"destinationSettings,omitempty"`
 }
 
 // CreateIntegrationRequest is the POST /v1/integrations body.

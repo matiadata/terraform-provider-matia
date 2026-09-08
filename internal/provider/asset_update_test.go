@@ -144,6 +144,7 @@ func TestIntegrationToModel_UnknownComputedFieldsWithoutAPIValue(t *testing.T) {
 			DestinationSchema: types.StringValue("raw"),
 			OnSchemaUpdate:    types.StringUnknown(),
 		},
+		preservePlanValue,
 	)
 	require.True(t, model.OnSchemaUpdate.IsNull(), "on_schema_update = %v, want null", model.OnSchemaUpdate)
 }
@@ -161,6 +162,26 @@ func TestIntegrationToModel_OnSchemaUpdateFromAPI(t *testing.T) {
 		integrationModel{
 			OnSchemaUpdate: types.StringUnknown(),
 		},
+		preservePlanValue,
 	)
 	require.Equal(t, "enableAll", model.OnSchemaUpdate.ValueString())
+}
+
+func TestBuildAssetUpdateRequest_ClearsDescription(t *testing.T) {
+	req, changed, diags := buildAssetUpdateRequest(
+		types.StringValue("same"),
+		types.StringValue("same"),
+		types.StringNull(),
+		types.StringValue("old"),
+		types.StringNull(),
+		types.StringNull(),
+		types.StringValue(`{"hostname":"localhost"}`),
+		types.StringValue(`{"hostname":"localhost"}`),
+		types.StringNull(),
+		types.StringNull(),
+	)
+	require.False(t, diags.HasError(), "unexpected diags: %v", diags)
+	require.True(t, changed)
+	require.NotNil(t, req.Description)
+	require.Empty(t, *req.Description)
 }

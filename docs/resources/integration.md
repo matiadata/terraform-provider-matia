@@ -45,7 +45,9 @@ variable "destination_id" {
 ### Optional
 
 - `agent_id` (String) Hybrid deployment agent ID for running the integration in your environment. An imported integration keeps the agent the API reports, so write it into the configuration: omitting it plans the agent away and the next apply detaches the integration from it.
+- `destination_database` (String) Snowflake database this integration loads into, chosen from the destination asset's default_database and additional_databases. Omit it on creation to use the default; once recorded, omitting it keeps the recorded selection. Changing it, or setting it on an integration that has none recorded, forces resource replacement: the API cannot move a synced integration.
 - `destination_settings` (String) Optional JSON object for advanced destination settings passed to the Matia API. Changing this forces resource replacement. The provider does not read these settings back, so they are null on an imported integration and a configuration that sets them plans a replacement after import.
+- `destination_warehouse` (String) Snowflake warehouse this integration runs on, chosen from the destination asset's default_warehouse and additional_warehouses. Omit it on creation to use the default; once recorded, omitting it keeps the recorded selection. Changing it, or setting it on an integration that has none recorded, forces resource replacement.
 - `name` (String) Display name for the integration. When omitted, Matia assigns a default name.
 - `on_schema_update` (String) Schema change policy: enableAll, enableColumnChanges, enableNamespaceChanges, ignoreAll, or pauseConnection.
 - `paused` (Boolean) When true, the integration is paused (disabled). Importing a paused integration keeps that value, so write it into the configuration: omitting it falls back to the default and the next apply resumes the integration.

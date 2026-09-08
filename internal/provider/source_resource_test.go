@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -53,8 +54,8 @@ func testAccApplyAssetPatch(payload string, req client.UpdateAssetRequest) strin
 	if req.Name != "" {
 		envelope.Data.Name = req.Name
 	}
-	if req.Description != "" {
-		envelope.Data.Description = req.Description
+	if req.Description != nil {
+		envelope.Data.Description = *req.Description
 	}
 	if req.AuthMethod != "" {
 		envelope.Data.AuthMethod = req.AuthMethod
@@ -73,6 +74,12 @@ func testAccApplyAssetPatch(payload string, req client.UpdateAssetRequest) strin
 }
 
 func testAccStartAssetsServer(t *testing.T) string {
+	return testAccStartAssetsServerWithConnectionType(t, "")
+}
+
+// connectionType overrides what the API reports for every created asset; empty
+// echoes the request, as the API does for non-Snowflake connectors.
+func testAccStartAssetsServerWithConnectionType(t *testing.T, connectionType string) string {
 	t.Helper()
 
 	store := map[string]string{}
@@ -94,7 +101,11 @@ func testAccStartAssetsServer(t *testing.T) string {
 
 			id := fmt.Sprintf("asset-%d", nextID)
 			nextID++
-			store[id] = testAccAssetJSON(id, req.Name, req.Type, req.ConnectionType)
+			reported := req.ConnectionType
+			if connectionType != "" {
+				reported = connectionType
+			}
+			store[id] = testAccAssetJSON(id, req.Name, req.Type, reported)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"code":"success","data":{"id":%q}}`, id)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/assets/"):
@@ -296,4 +307,50 @@ func TestAssetToModel_UsesTemplateFields(t *testing.T) {
 	require.False(t, diags.HasError())
 	require.Equal(t, "planned-name", model.Name.ValueString())
 	require.Equal(t, "planned-description", model.Description.ValueString())
+}
+
+// A backend with multipurpose support creates every Snowflake asset as
+// multi_purpose, and a flat credentials PATCH on such an asset is silently
+// dropped, so the legacy resource refuses it.
+func TestAccDestination_multiPurposeCredentialsChangeIsRefused(t *testing.T) {
+	apiURL := testAccStartAssetsServerWithConnectionType(t, "multi_purpose")
+	apiToken := testAccAPIToken(t)
+
+	config := func(name, password string) string {
+		return testAccProviderConfig(apiURL, apiToken) + fmt.Sprintf(`
+resource "matia_destination" "test" {
+  name = %q
+  type = "snowflake"
+
+  connection_config = jsonencode({
+    account   = "xy12345"
+    database  = "STANDARD_DATABASE"
+    warehouse = "STANDARD_WAREHOUSE"
+    username  = "snowflake_user"
+  })
+
+  connection_secrets = jsonencode({
+    password = %q
+  })
+}
+`, name, password)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config("legacy-snowflake", "old-secret"),
+			},
+			{
+				// Metadata still updates; only the credentials are frozen.
+				Config: config("legacy-snowflake-renamed", "old-secret"),
+				Check:  resource.TestCheckResourceAttr("matia_destination.test", "name", "legacy-snowflake-renamed"),
+			},
+			{
+				Config:      config("legacy-snowflake-renamed", "rotated"),
+				ExpectError: regexp.MustCompile(`Credentials of a multipurpose asset cannot be changed here`),
+			},
+		},
+	})
 }

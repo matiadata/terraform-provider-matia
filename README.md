@@ -45,6 +45,7 @@ The provider authenticates every request with a Matia API key (sent as the `X-Ap
 | ------------------------------- | ------------------------------------------------------------ |
 | `matia_source`                  | Manage a Matia source asset                                  |
 | `matia_destination`             | Manage a Matia destination asset                             |
+| `matia_asset`                   | Manage a multipurpose Snowflake asset                        |
 | `matia_integration`             | Manage a data integration between a source and a destination |
 | `matia_integration_schedule`    | Manage the replication schedule for an integration           |
 | `matia_integration_schema`      | Manage schema configuration for an integration               |
