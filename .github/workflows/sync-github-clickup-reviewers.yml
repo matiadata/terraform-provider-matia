@@ -1,0 +1,204 @@
+# Mirrors GitHub PR reviewers into the linked ClickUp task's "Code Reviewers"
+# custom field, so this repo's PRs behave like monorepo PRs. The sync logic
+# mirrors matia/.github/workflows/sync-github-clickup-reviewers.yml, adapted to
+# this repo's workflow conventions. Keys off the DEV-<num> id in the PR branch
+# name; branches without one (e.g. dependabot/*) are skipped.
+#
+# Requires four repository secrets (provisioned outside this PR, admin action):
+#   CLICKUP_TOKEN       - ClickUp API token
+#   CLICKUP_FIELD_ID    - the "Code Reviewers" custom-field id
+#   CLICKUP_TEAM_ID     - ClickUp team/workspace id
+#   MAP_GH_TO_CU_JSON   - {"<gh-login>": <clickup-user-id>, ...} map
+name: ClickUp Reviewer Sync
+
+on:
+  # Manual run (safe for testing)
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to sync (manual reconcile)"
+        required: true
+        type: string
+
+  pull_request:
+    types: [review_requested, review_request_removed]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  pull-requests: read
+
+# Serialize runs per PR so add/rem deltas do not race on the same ClickUp field.
+concurrency:
+  group: reviewer-sync-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  manual_reconcile:
+    name: Manual reconcile
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          CLICKUP_TOKEN: ${{ secrets.CLICKUP_TOKEN }}
+          CLICKUP_FIELD_ID: ${{ secrets.CLICKUP_FIELD_ID }}
+          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
+          MAP_GH_TO_CU_JSON: ${{ secrets.MAP_GH_TO_CU_JSON }}
+        with:
+          script: |
+            const prNumber = (context.payload?.inputs?.pr_number || "").trim();
+            if (!prNumber) return core.setFailed("No PR number.");
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: Number(prNumber)
+            });
+
+            // Extract DEV-#### from branch name (underscore-safe)
+            const branch = pr.head?.ref || "";
+            const m = branch.match(/DEV-\d+(?=\D|$)/i);
+            if (!m) return core.setFailed(`No DEV-<num> key in branch "${branch}".`);
+            const taskKey = m[0].toUpperCase();
+            core.info(`Task=${taskKey} (from branch=${branch})`);
+
+            // Desired reviewer set = requested reviewers + anyone who submitted a review
+            const desired = new Set((pr.requested_reviewers || []).map(r => r.login));
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: Number(prNumber), per_page: 100
+            });
+            (reviews || []).forEach(r => r.user?.login && desired.add(r.user.login));
+            const ghLogins = Array.from(desired);
+            core.info(`GH reviewers to mirror: ${ghLogins.join(", ") || "(none)"}`);
+
+            let map={}; try { map = JSON.parse(process.env.MAP_GH_TO_CU_JSON || "{}"); } catch {}
+            const cuIds = ghLogins.map(u => map[u]).filter(Boolean).map(String);
+            const unmapped = ghLogins.filter(u => !map[u]);
+            if (unmapped.length) core.info(`Unmapped GH users (skipped): ${unmapped.join(", ")}`);
+
+            const teamId = (process.env.CLICKUP_TEAM_ID || "").trim();
+            const fieldId = (process.env.CLICKUP_FIELD_ID || "").trim();
+            if (!teamId || !fieldId) return core.setFailed("Missing CLICKUP_TEAM_ID or CLICKUP_FIELD_ID.");
+
+            const base = `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskKey)}/field/${fieldId}?custom_task_ids=true&team_id=${encodeURIComponent(teamId)}`;
+            const headers = { "Authorization": process.env.CLICKUP_TOKEN, "Content-Type": "application/json" };
+
+            // Clear the field (DELETE), then add the desired set (POST)
+            const delRes = await fetch(base, { method: "DELETE", headers });
+            core.info(`Clear field: ${delRes.status} ${await delRes.text()}`);
+
+            if (cuIds.length === 0) {
+              core.info("No reviewers to add after clear. Done.");
+              return;
+            }
+
+            const addBody = { value: { add: cuIds, rem: [] } };
+            const addRes = await fetch(base, { method: "POST", headers, body: JSON.stringify(addBody) });
+            const txt = await addRes.text();
+            core.info(`Add reviewers: ${addRes.status} ${txt}`);
+            if (!addRes.ok) core.setFailed(`Failed add: ${addRes.status} ${txt}`);
+
+  event_delta:
+    name: Event delta
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          CLICKUP_TOKEN: ${{ secrets.CLICKUP_TOKEN }}
+          CLICKUP_FIELD_ID: ${{ secrets.CLICKUP_FIELD_ID }}
+          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
+          MAP_GH_TO_CU_JSON: ${{ secrets.MAP_GH_TO_CU_JSON }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) return core.info("No PR in payload.");
+
+            // Extract DEV-#### from branch name (underscore-safe)
+            const branch = pr.head?.ref || "";
+            const m = branch.match(/DEV-\d+(?=\D|$)/i);
+            if (!m) return core.info(`No DEV-<num> key in branch "${branch}"; skipping.`);
+            const taskKey = m[0].toUpperCase();
+
+            const parseMap = () => {
+              try { return JSON.parse(process.env.MAP_GH_TO_CU_JSON || "{}"); }
+              catch { return {}; }
+            };
+            // ClickUp's users field expects a numeric user id, not a string
+            const toCU = (login, map) => {
+              const v = map[login];
+              if (v === undefined || v === null || v === "") return null;
+              const n = Number(v);
+              return Number.isFinite(n) ? n : null;
+            };
+
+            let ghLogin = null, addIds = [], remIds = [];
+            if (context.eventName === "pull_request") {
+              if (context.payload.action === "review_requested") {
+                ghLogin = context.payload.requested_reviewer?.login || null;
+                if (!ghLogin && context.payload.requested_team) {
+                  core.info(`Team review request (${context.payload.requested_team.slug}); skipping user mapping.`);
+                  return;
+                }
+                core.info(`Delta: ADD ${ghLogin}`);
+              } else if (context.payload.action === "review_request_removed") {
+                ghLogin = context.payload.requested_reviewer?.login || null;
+                if (!ghLogin && context.payload.requested_team) {
+                  core.info(`Team review removal (${context.payload.requested_team.slug}); skipping user mapping.`);
+                  return;
+                }
+                core.info(`Delta: REM ${ghLogin}`);
+              }
+            } else if (context.eventName === "pull_request_review") {
+              if (context.payload.action === "submitted") {
+                ghLogin = context.payload.review?.user?.login || null; // treat submit as ADD
+                core.info(`Delta: ADD (submit) ${ghLogin}`);
+              } else {
+                core.info(`Review action "${context.payload.action}" ignored for delta.`);
+              }
+            }
+
+            if (!ghLogin) return core.info("No reviewer delta in this event.");
+
+            const map = parseMap();
+            const cuId = toCU(ghLogin, map);
+            if (!cuId) {
+              core.info(`Unmapped or non-numeric GH user: ${ghLogin} (skipping).`);
+              return;
+            }
+
+            if (context.eventName === "pull_request" && context.payload.action === "review_request_removed") {
+              remIds = [cuId];
+            } else {
+              addIds = [cuId];
+            }
+
+            const teamId = (process.env.CLICKUP_TEAM_ID || "").trim();
+            const fieldId = (process.env.CLICKUP_FIELD_ID || "").trim();
+            if (!teamId || !fieldId) return core.setFailed("Missing CLICKUP_TEAM_ID or CLICKUP_FIELD_ID.");
+
+            const headers = { "Authorization": process.env.CLICKUP_TOKEN, "Content-Type": "application/json" };
+            const taskUrl = `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskKey)}?custom_task_ids=true&team_id=${encodeURIComponent(teamId)}`;
+            const url = `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskKey)}/field/${fieldId}?custom_task_ids=true&team_id=${encodeURIComponent(teamId)}`;
+
+            const t0 = await fetch(taskUrl, { headers });
+            if (!t0.ok) return core.setFailed(`Task GET failed: ${t0.status} ${await t0.text()}`);
+            const task = await t0.json();
+            const field = (task.custom_fields || []).find(f => String(f.id) === String(fieldId));
+            core.info(`BEFORE value: ${field ? JSON.stringify(field.value) : "(field not found)"}`);
+
+            const body = { value: { add: addIds, rem: remIds } };
+            core.info(`Task=${taskKey} add=${JSON.stringify(addIds)} rem=${JSON.stringify(remIds)} (from ${context.eventName}:${context.payload.action})`);
+            core.info(`POST ${url} with body: ${JSON.stringify(body)}`);
+
+            const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+            const txt = await res.text();
+            core.info(`ClickUp: ${res.status} ${txt}`);
+            if (!res.ok) return core.setFailed(`Failed: ${res.status} ${txt}`);
+
+            const t1 = await fetch(taskUrl, { headers });
+            if (!t1.ok) return core.setFailed(`Task re-GET failed: ${t1.status} ${await t1.text()}`);
+            const task1 = await t1.json();
+            const field1 = (task1.custom_fields || []).find(f => String(f.id) === String(fieldId));
+            core.info(`AFTER value: ${field1 ? JSON.stringify(field1.value) : "(field not found)"}`);

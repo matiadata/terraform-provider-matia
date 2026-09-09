@@ -28,27 +28,28 @@ resource "matia_source" "mssql" {
   })
 }
 
-resource "matia_destination" "snowflake" {
-  name = "tf-dev-destination-snowflake"
-  type = "snowflake"
+resource "matia_asset" "snowflake" {
+  name        = "tf-dev-snowflake"
+  type        = "snowflake"
+  auth_method = "keyPair"
 
-  connection_config = jsonencode({
-    account   = var.snowflake_account
-    database  = var.snowflake_database
-    warehouse = var.snowflake_warehouse
-    role      = var.snowflake_role
-    username  = var.snowflake_username
-  })
-
-  connection_secrets = jsonencode({
-    password = var.snowflake_password
-  })
+  # One user for every purpose. The public key is for the dashboard's setup script;
+  # Matia authenticates with the private key.
+  credentials = {
+    account                = var.snowflake_account
+    username               = var.snowflake_username
+    database               = var.snowflake_database
+    warehouse              = var.snowflake_warehouse
+    private_key            = var.snowflake_private_key
+    private_key_passphrase = var.snowflake_private_key_passphrase
+    public_key             = var.snowflake_public_key
+  }
 }
 
 resource "matia_integration" "mssql_to_snowflake" {
   name               = "tf-dev-mssql-to-snowflake"
   source_id          = matia_source.mssql.id
-  destination_id     = matia_destination.snowflake.id
+  destination_id     = matia_asset.snowflake.id
   destination_schema = var.destination_schema
 
   # Effectively create-only: source_settings has no RequiresReplace, so editing the mode
@@ -93,8 +94,8 @@ output "source_id" {
 }
 
 output "destination_id" {
-  description = "Snowflake destination asset ID"
-  value       = matia_destination.snowflake.id
+  description = "Snowflake asset ID the integration loads into"
+  value       = matia_asset.snowflake.id
 }
 
 variable "matia_api_token" {
@@ -156,6 +157,10 @@ variable "snowflake_account" {
   type = string
 }
 
+variable "snowflake_username" {
+  type = string
+}
+
 variable "snowflake_database" {
   type = string
 }
@@ -164,17 +169,22 @@ variable "snowflake_warehouse" {
   type = string
 }
 
-variable "snowflake_role" {
-  type = string
+variable "snowflake_private_key" {
+  type        = string
+  sensitive   = true
+  description = "PKCS#8 PEM private key, newlines included."
 }
 
-variable "snowflake_username" {
-  type = string
+variable "snowflake_private_key_passphrase" {
+  type        = string
+  sensitive   = true
+  default     = null
+  description = "Passphrase of the private key, when it is encrypted."
 }
 
-variable "snowflake_password" {
-  type      = string
-  sensitive = true
+variable "snowflake_public_key" {
+  type        = string
+  description = "Public key registered on the Snowflake user: the base64 body without the BEGIN and END lines."
 }
 
 variable "destination_schema" {

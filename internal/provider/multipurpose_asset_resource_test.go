@@ -233,6 +233,7 @@ resource "matia_asset" "test" {
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n"
+    public_key  = "PLACEHOLDER-PUBLIC-KEY-SHARED"
   }
 %s
 }
@@ -241,10 +242,11 @@ resource "matia_asset" "test" {
 
 const testAccAssetCatalogOverride = `
   catalog = {
-    account   = "myorg-myaccount"
-    username  = "OBS_USER"
-    warehouse = "OBS_WH"
-    password  = "obs-secret"
+    account     = "myorg-myaccount"
+    username    = "OBS_USER"
+    warehouse   = "OBS_WH"
+    private_key = "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n"
+    public_key  = "PLACEHOLDER-PUBLIC-KEY-CATALOG"
   }
 `
 
@@ -401,6 +403,13 @@ func TestAccAsset_sharedCredentialsWithOverride(t *testing.T) {
 						}
 						if _, ok := req.ConnectionOverrides["catalog"]; !ok || len(req.ConnectionOverrides) != 1 {
 							return fmt.Errorf("catalog must be the only override: %+v", req.ConnectionOverrides)
+						}
+						if req.Connection["public_key"] != "PLACEHOLDER-PUBLIC-KEY-SHARED" {
+							return fmt.Errorf("shared public_key not forwarded: %+v", req.Connection)
+						}
+						catalogOverride, _ := req.ConnectionOverrides["catalog"].(map[string]any)
+						if catalogOverride["public_key"] != "PLACEHOLDER-PUBLIC-KEY-CATALOG" {
+							return fmt.Errorf("catalog public_key not forwarded: %+v", req.ConnectionOverrides)
 						}
 						return nil
 					},
@@ -606,7 +615,18 @@ resource "matia_asset" "test" {
 					testAccAssetConfig(apiURL, apiToken, "warehouse", ""),
 					`    database  = "MART"`, "", 1,
 				),
-				ExpectError: regexp.MustCompile(`On reverse_etl: set database`),
+				ExpectError: regexp.MustCompile(`On reverse_etl: set database or database_schemas`),
+			},
+			{
+				// Rows stand in for the database on reverse ETL only. The ETL
+				// destination resolver reads the single database, so an ETL
+				// block listing rows alone must still be rejected.
+				Config: strings.Replace(
+					testAccAssetConfig(apiURL, apiToken, "warehouse", ""),
+					`    database  = "RAW"`,
+					`    database_schemas = [{ database = "RAW", schema = "PUBLIC" }]`, 1,
+				),
+				ExpectError: regexp.MustCompile(`On etl: set database\.`),
 			},
 			{
 				Config: testAccProviderConfig(apiURL, apiToken) + `
@@ -848,16 +868,89 @@ func TestAccAsset_tagsAreSentOnCreate(t *testing.T) {
 	})
 }
 
+func databaseSchemaAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"database": types.StringType,
+		"schema":   types.StringType,
+	}
+}
+
 func snowflakeCredentialsAttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
 		"account":                types.StringType,
 		"username":               types.StringType,
 		"warehouse":              types.StringType,
 		"database":               types.StringType,
+		"database_schemas":       types.ListType{ElemType: types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}},
 		"password":               types.StringType,
 		"private_key":            types.StringType,
 		"private_key_passphrase": types.StringType,
+		"public_key":             types.StringType,
 	}
+}
+
+func mustDatabaseSchemas(t *testing.T, ctx context.Context, rows ...[2]string) types.List {
+	t.Helper()
+	models := make([]databaseSchemaModel, 0, len(rows))
+	for _, row := range rows {
+		models = append(models, databaseSchemaModel{
+			Database: types.StringValue(row[0]),
+			Schema:   types.StringValue(row[1]),
+		})
+	}
+	list, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}, models)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	return list
+}
+
+func TestSnowflakeCredentialsToAPISendsDatabaseSchemas(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	nullRows := types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()})
+
+	withRows, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
+		Account:         types.StringValue("acct"),
+		Username:        types.StringValue("retl"),
+		Warehouse:       types.StringValue("RETL_WH"),
+		Database:        types.StringNull(),
+		DatabaseSchemas: mustDatabaseSchemas(t, ctx, [2]string{"MART", "PUBLIC"}, [2]string{"REPORTING", "ANALYTICS"}),
+		Password:        types.StringValue("pw"),
+	})
+	require.False(t, diags.HasError(), diagsSummary(diags))
+
+	connection, diags := snowflakeCredentialsToAPI(ctx, withRows)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.Equal(
+		t,
+		[]map[string]string{
+			{"database": "MART", "schema": "PUBLIC"},
+			{"database": "REPORTING", "schema": "ANALYTICS"},
+		},
+		connection["databaseSchemas"],
+		"the rows travel in configured order, which is what Matia stores and the Manage tab lists",
+	)
+	require.NotContains(t, connection, "database", "an unset database is still omitted")
+
+	withoutRows, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
+		Account:         types.StringValue("acct"),
+		Username:        types.StringValue("etl"),
+		Warehouse:       types.StringValue("LOAD_WH"),
+		Database:        types.StringValue("RAW"),
+		DatabaseSchemas: nullRows,
+		Password:        types.StringValue("pw"),
+	})
+	require.False(t, diags.HasError(), diagsSummary(diags))
+
+	connection, diags = snowflakeCredentialsToAPI(ctx, withoutRows)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.NotContains(
+		t,
+		connection,
+		"databaseSchemas",
+		"a block that lists none must not send an empty array, which the API rejects",
+	)
+	require.Equal(t, "RAW", connection["database"])
 }
 
 func TestWarnAdoptedCredentials(t *testing.T) {
@@ -865,10 +958,11 @@ func TestWarnAdoptedCredentials(t *testing.T) {
 	ctx := context.Background()
 
 	block, blockDiags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
-		Account:   types.StringValue("acct"),
-		Username:  types.StringValue("user"),
-		Warehouse: types.StringValue("wh"),
-		Password:  types.StringValue("pw"),
+		Account:         types.StringValue("acct"),
+		Username:        types.StringValue("user"),
+		Warehouse:       types.StringValue("wh"),
+		Password:        types.StringValue("pw"),
+		DatabaseSchemas: types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}),
 	})
 	require.False(t, blockDiags.HasError(), diagsSummary(blockDiags))
 	nullBlock := types.ObjectNull(snowflakeCredentialsAttrTypes())
@@ -901,31 +995,171 @@ func TestSnowflakeCredentialsIssue(t *testing.T) {
 		return value
 	}
 	base := snowflakeCredentialsModel{
-		Account:   types.StringValue("acct"),
-		Username:  types.StringValue("user"),
-		Warehouse: types.StringValue("wh"),
-		Database:  types.StringValue("db"),
+		Account:         types.StringValue("acct"),
+		Username:        types.StringValue("user"),
+		Warehouse:       types.StringValue("wh"),
+		Database:        types.StringValue("db"),
+		DatabaseSchemas: types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}),
 	}
+
+	etlRule := databaseRule{required: true}
+	reverseEtlRule := databaseRule{required: true, rowsMayReplace: true}
+	catalogRule := databaseRule{}
 
 	unknownKey := base
 	unknownKey.PrivateKey = types.StringUnknown()
-	issue, diags := snowflakeCredentialsIssue(ctx, block(unknownKey), true)
+	issue, diags := snowflakeCredentialsIssue(ctx, block(unknownKey), etlRule)
 	require.False(t, diags.HasError())
 	require.Empty(t, issue, "a key that resolves at apply counts as present")
 
 	noSecret := base
-	issue, diags = snowflakeCredentialsIssue(ctx, block(noSecret), true)
+	issue, diags = snowflakeCredentialsIssue(ctx, block(noSecret), etlRule)
 	require.False(t, diags.HasError())
 	require.Equal(t, "set password or private_key", issue)
 
 	noDatabase := base
 	noDatabase.Password = types.StringValue("pw")
 	noDatabase.Database = types.StringNull()
-	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), true)
+
+	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), etlRule)
 	require.False(t, diags.HasError())
 	require.Equal(t, "set database", issue)
 
-	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), false)
+	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), reverseEtlRule)
+	require.False(t, diags.HasError())
+	require.Equal(t, "set database or database_schemas", issue)
+
+	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), catalogRule)
 	require.False(t, diags.HasError())
 	require.Empty(t, issue)
+
+	// Only reverse ETL reads the list where a database would otherwise be read.
+	rowsOnly := noDatabase
+	rowsOnly.DatabaseSchemas = mustDatabaseSchemas(t, ctx, [2]string{"MART", "PUBLIC"})
+
+	issue, diags = snowflakeCredentialsIssue(ctx, block(rowsOnly), reverseEtlRule)
+	require.False(t, diags.HasError())
+	require.Empty(t, issue, "rows stand in for the database on reverse ETL")
+
+	issue, diags = snowflakeCredentialsIssue(ctx, block(rowsOnly), etlRule)
+	require.False(t, diags.HasError())
+	require.Equal(
+		t,
+		"set database",
+		issue,
+		"the ETL destination resolver reads the single database, so rows cannot stand in for it",
+	)
+
+	// A list that only resolves at apply must not be read as absent.
+	unknownRows := noDatabase
+	unknownRows.DatabaseSchemas = types.ListUnknown(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()})
+
+	issue, diags = snowflakeCredentialsIssue(ctx, block(unknownRows), reverseEtlRule)
+	require.False(t, diags.HasError())
+	require.Empty(t, issue, "an unknown list resolves at apply, like an unknown string")
+
+	issue, diags = snowflakeCredentialsIssue(ctx, block(unknownRows), etlRule)
+	require.False(t, diags.HasError())
+	require.Equal(t, "set database", issue)
+}
+
+// database_schemas can come from another resource, so the whole list is unknown
+// while planning. Validation must wait for it rather than call it absent.
+func TestAccAsset_databaseSchemasUnknownAtPlanTime(t *testing.T) {
+	apiURL, server := testAccStartMultiPurposeAssetsServer(t)
+	apiToken := testAccAPIToken(t)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProviderConfig(apiURL, apiToken) + `
+resource "terraform_data" "schemas" {
+  input = jsonencode([{ database = "MART", schema = "PUBLIC" }])
+}
+
+resource "matia_asset" "test" {
+  name = "warehouse"
+  type = "snowflake"
+
+  etl = {
+    account   = "myorg-myaccount"
+    username  = "ETL_USER"
+    database  = "RAW"
+    warehouse = "LOAD_WH"
+    password  = "etl-secret"
+  }
+  reverse_etl = {
+    account   = "myorg-myaccount"
+    username  = "RETL_USER"
+    warehouse = "RETL_WH"
+    password  = "retl-secret"
+
+    database_schemas = jsondecode(terraform_data.schemas.output)
+  }
+  catalog = {
+    account   = "myorg-myaccount"
+    username  = "OBS_USER"
+    warehouse = "OBS_WH"
+    password  = "obs-secret"
+  }
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"matia_asset.test", "reverse_etl.database_schemas.0.database", "MART",
+					),
+					func(_ *terraform.State) error {
+						server.mu.Lock()
+						defer server.mu.Unlock()
+						var raw struct {
+							ConnectionOverrides map[string]map[string]any `json:"connectionOverrides"`
+							Connection          map[string]map[string]any `json:"connection"`
+						}
+						if err := json.Unmarshal(server.createBodies[0], &raw); err != nil {
+							return err
+						}
+						block := raw.Connection["reverseEtl"]
+						if block == nil {
+							block = raw.ConnectionOverrides["reverseEtl"]
+						}
+						got, err := json.Marshal(block["databaseSchemas"])
+						if err != nil {
+							return err
+						}
+						want := `[{"database":"MART","schema":"PUBLIC"}]`
+						if string(got) != want {
+							return fmt.Errorf("reverseEtl databaseSchemas = %s, want %s", got, want)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+func TestSnowflakeCredentialsToAPI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	block, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
+		Account:         types.StringValue("acct"),
+		Username:        types.StringValue("user"),
+		Warehouse:       types.StringValue("wh"),
+		PrivateKey:      types.StringValue("PLACEHOLDER-PEM-NOT-A-REAL-KEY\n"),
+		PublicKey:       types.StringValue("PLACEHOLDER-PUBLIC-KEY"),
+		DatabaseSchemas: types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}),
+	})
+	require.False(t, diags.HasError(), diagsSummary(diags))
+
+	connection, diags := snowflakeCredentialsToAPI(ctx, block)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.Equal(t, map[string]any{
+		"account":     "acct",
+		"username":    "user",
+		"warehouse":   "wh",
+		"private_key": "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n",
+		"public_key":  "PLACEHOLDER-PUBLIC-KEY",
+	}, connection)
 }

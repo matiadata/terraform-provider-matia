@@ -55,19 +55,24 @@ Full documentation for each resource is published on the [Terraform Registry](ht
 
 ## Examples
 
-| Example                                                                                                              | Description                                                             |
-| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| [`examples/getting-started/`](examples/getting-started/)                                                             | Minimal configuration to verify provider setup                          |
-| [`examples/integration-postgres-snowflake/`](examples/integration-postgres-snowflake/)                               | Postgres -> Snowflake integration using cloud execution                 |
-| [`examples/integration-postgres-snowflake-existing-agent/`](examples/integration-postgres-snowflake-existing-agent/) | Postgres -> Snowflake hybrid integration using an existing agent        |
-| [`examples/integration-postgres-snowflake-create-agent/`](examples/integration-postgres-snowflake-create-agent/)     | Postgres -> Snowflake hybrid integration with a Terraform-created agent |
-| [`examples/integration-mssql-snowflake/`](examples/integration-mssql-snowflake/)                                     | SQL Server -> Snowflake integration using cloud execution               |
-| [`examples/integration-mysql-bigquery/`](examples/integration-mysql-bigquery/)                                       | MySQL -> BigQuery integration using cloud execution                     |
-| [`examples/integration-mysql-bigquery-existing-agent/`](examples/integration-mysql-bigquery-existing-agent/)         | MySQL -> BigQuery hybrid integration using an existing agent            |
-| [`examples/integration-mysql-bigquery-create-agent/`](examples/integration-mysql-bigquery-create-agent/)             | MySQL -> BigQuery hybrid integration with a Terraform-created agent     |
-| [`examples/integration/`](examples/integration/)                                                                     | Full Postgres -> Snowflake integration stack                            |
-| [`examples/integration/existing-assets/`](examples/integration/existing-assets/)                                     | Integration stack using existing source/destination IDs                 |
-| [`examples/resources/`](examples/resources/)                                                                         | Per-resource configuration snippets                                     |
+| Example                                                                                                                                      | Description                                                                                                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| [`examples/getting-started/`](examples/getting-started/)                                                                                     | Minimal configuration to verify provider setup                                                                    |
+| [`examples/integration-postgres-snowflake/`](examples/integration-postgres-snowflake/)                                                       | Postgres -> Snowflake integration using cloud execution                                                           |
+| [`examples/integration-postgres-snowflake-existing-agent/`](examples/integration-postgres-snowflake-existing-agent/)                         | Postgres -> Snowflake hybrid integration using an existing agent                                                  |
+| [`examples/integration-postgres-snowflake-create-agent/`](examples/integration-postgres-snowflake-create-agent/)                             | Postgres -> Snowflake hybrid integration with a Terraform-created agent                                           |
+| [`examples/integration-mssql-snowflake-keypair/`](examples/integration-mssql-snowflake-keypair/)                                             | SQL Server -> Snowflake integration using cloud execution, new Snowflake asset with key-pair auth                 |
+| [`examples/integration-mssql-snowflake-existing-asset/`](examples/integration-mssql-snowflake-existing-asset/)                               | SQL Server -> Snowflake integration using cloud execution and an existing Snowflake asset                         |
+| [`examples/integration-mssql-snowflake-existing-agent-keypair/`](examples/integration-mssql-snowflake-existing-agent-keypair/)               | SQL Server -> Snowflake hybrid integration using an existing agent, new Snowflake asset with key-pair auth        |
+| [`examples/integration-mssql-snowflake-existing-agent-existing-asset/`](examples/integration-mssql-snowflake-existing-agent-existing-asset/) | SQL Server -> Snowflake hybrid integration using an existing agent and an existing Snowflake asset                |
+| [`examples/integration-mssql-snowflake-create-agent-keypair/`](examples/integration-mssql-snowflake-create-agent-keypair/)                   | SQL Server -> Snowflake hybrid integration with a Terraform-created agent, new Snowflake asset with key-pair auth |
+| [`examples/integration-mssql-snowflake-create-agent-existing-asset/`](examples/integration-mssql-snowflake-create-agent-existing-asset/)     | SQL Server -> Snowflake hybrid integration with a Terraform-created agent and an existing Snowflake asset         |
+| [`examples/integration-mysql-bigquery/`](examples/integration-mysql-bigquery/)                                                               | MySQL -> BigQuery integration using cloud execution                                                               |
+| [`examples/integration-mysql-bigquery-existing-agent/`](examples/integration-mysql-bigquery-existing-agent/)                                 | MySQL -> BigQuery hybrid integration using an existing agent                                                      |
+| [`examples/integration-mysql-bigquery-create-agent/`](examples/integration-mysql-bigquery-create-agent/)                                     | MySQL -> BigQuery hybrid integration with a Terraform-created agent                                               |
+| [`examples/integration/`](examples/integration/)                                                                                             | Full Postgres -> Snowflake integration stack                                                                      |
+| [`examples/integration/existing-assets/`](examples/integration/existing-assets/)                                                             | Integration stack using existing source/destination IDs                                                           |
+| [`examples/resources/`](examples/resources/)                                                                                                 | Per-resource configuration snippets                                                                               |
 
 ## Support and contributing
 

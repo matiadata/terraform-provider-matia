@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -20,22 +21,44 @@ type snowflakeCredentialsModel struct {
 	Username             types.String `tfsdk:"username"`
 	Warehouse            types.String `tfsdk:"warehouse"`
 	Database             types.String `tfsdk:"database"`
+	DatabaseSchemas      types.List   `tfsdk:"database_schemas"`
 	Password             types.String `tfsdk:"password"`
 	PrivateKey           types.String `tfsdk:"private_key"`
 	PrivateKeyPassphrase types.String `tfsdk:"private_key_passphrase"`
+	PublicKey            types.String `tfsdk:"public_key"`
+}
+
+type databaseSchemaModel struct {
+	Database types.String `tfsdk:"database"`
+	Schema   types.String `tfsdk:"schema"`
+}
+
+// databaseRule says whether a block must name a database, and whether listing
+// database_schemas can stand in for it. Only reverse ETL reads the list where a
+// database would otherwise be read: the ETL destination resolver and the ETL
+// source both take the single `database` and never look at the list, so for them
+// a list alone would pass validation and then fail downstream.
+type databaseRule struct {
+	required       bool
+	rowsMayReplace bool
 }
 
 // The order matters for diagnostics only; the API accepts the purposes in any order.
 var credentialsPurposes = []struct {
-	attribute        string
-	apiKey           string
-	required         bool
-	requiresDatabase bool
+	attribute string
+	apiKey    string
+	required  bool
+	database  databaseRule
 }{
-	{attribute: "etl", apiKey: "etl", required: true, requiresDatabase: true},
-	{attribute: "reverse_etl", apiKey: "reverseEtl", required: true, requiresDatabase: true},
+	{attribute: "etl", apiKey: "etl", required: true, database: databaseRule{required: true}},
+	{
+		attribute: "reverse_etl",
+		apiKey:    "reverseEtl",
+		required:  true,
+		database:  databaseRule{required: true, rowsMayReplace: true},
+	},
 	{attribute: "catalog", apiKey: "catalog", required: true},
-	{attribute: "etl_source", apiKey: "etlSource", requiresDatabase: true},
+	{attribute: "etl_source", apiKey: "etlSource", database: databaseRule{required: true}},
 }
 
 const credentialsReplacementNote = " Changing or removing this block after creation forces resource replacement."
@@ -74,8 +97,38 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 				},
 			},
 			"database": schema.StringAttribute{
-				Description: "Default database. Required everywhere except on catalog.",
-				Optional:    true,
+				Description: "Default database. Required everywhere except on catalog, and on reverse_etl " +
+					"when database_schemas is set instead.",
+				Optional: true,
+			},
+			"database_schemas": schema.ListNestedAttribute{
+				Description: "Databases this purpose works in, each paired with a schema. Matia stores " +
+					"reverse-ETL and catalog databases this way, and its Manage tab reads them from here. " +
+					"On reverse_etl it replaces database. Elsewhere it is recorded alongside database, " +
+					"which etl and etl_source still need: the destination resolver and the ETL source read " +
+					"that single field and never this list.",
+				Optional: true,
+				Validators: []validator.List{
+					listvalidator.SizeAtLeast(1),
+				},
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"database": schema.StringAttribute{
+							Description: "Name of an existing database.",
+							Required:    true,
+							Validators: []validator.String{
+								stringvalidator.LengthAtLeast(1),
+							},
+						},
+						"schema": schema.StringAttribute{
+							Description: "Schema within the database. Matia requires one on every row.",
+							Required:    true,
+							Validators: []validator.String{
+								stringvalidator.LengthAtLeast(1),
+							},
+						},
+					},
+				},
 			},
 			"password": schema.StringAttribute{
 				Description: "Password for password authentication. Set this or private_key.",
@@ -91,6 +144,12 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 				Description: "Passphrase of an encrypted private_key.",
 				Optional:    true,
 				Sensitive:   true,
+			},
+			"public_key": schema.StringAttribute{
+				Description: "Base64 body of the public key, without the BEGIN and END lines, as Snowflake's " +
+					"RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the " +
+					"edit wizard and puts it in the Snowflake setup script. Adding it later replaces the asset.",
+				Optional: true,
 			},
 		},
 	}
@@ -129,6 +188,7 @@ func snowflakeCredentialsToAPI(ctx context.Context, block types.Object) (map[str
 		"password":               model.Password,
 		"private_key":            model.PrivateKey,
 		"private_key_passphrase": model.PrivateKeyPassphrase,
+		"public_key":             model.PublicKey,
 	}
 
 	connection := map[string]any{}
@@ -138,7 +198,33 @@ func snowflakeCredentialsToAPI(ctx context.Context, block types.Object) (map[str
 		}
 		connection[key] = value.ValueString()
 	}
+
+	rows, rowDiags := databaseSchemaRows(ctx, model.DatabaseSchemas)
+	diags.Append(rowDiags...)
+	if diags.HasError() {
+		return nil, diags
+	}
+	if len(rows) > 0 {
+		schemas := make([]map[string]string, 0, len(rows))
+		for _, row := range rows {
+			schemas = append(schemas, map[string]string{
+				"database": row.Database.ValueString(),
+				"schema":   row.Schema.ValueString(),
+			})
+		}
+		connection["databaseSchemas"] = schemas
+	}
 	return connection, diags
+}
+
+func databaseSchemaRows(ctx context.Context, list types.List) ([]databaseSchemaModel, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if list.IsNull() || list.IsUnknown() {
+		return nil, diags
+	}
+	var rows []databaseSchemaModel
+	diags.Append(list.ElementsAs(ctx, &rows, false)...)
+	return rows, diags
 }
 
 func blockIsSet(block types.Object) bool {
@@ -151,7 +237,7 @@ func blockIsSet(block types.Object) bool {
 func snowflakeCredentialsIssue(
 	ctx context.Context,
 	block types.Object,
-	requiresDatabase bool,
+	database databaseRule,
 ) (string, diag.Diagnostics) {
 	var model snowflakeCredentialsModel
 	diags := block.As(ctx, &model, basetypes.ObjectAsOptions{})
@@ -161,10 +247,21 @@ func snowflakeCredentialsIssue(
 	if !stringPresent(model.Password) && !stringPresent(model.PrivateKey) {
 		return "set password or private_key", diags
 	}
-	if requiresDatabase && !stringPresent(model.Database) {
-		return "set database", diags
+	if !database.required || stringPresent(model.Database) {
+		return "", diags
 	}
-	return "", diags
+	if database.rowsMayReplace && listPresent(model.DatabaseSchemas) {
+		return "", diags
+	}
+	if database.rowsMayReplace {
+		return "set database or database_schemas", diags
+	}
+	return "set database", diags
+}
+
+// A list that resolves at apply counts as present, like an unknown string.
+func listPresent(value types.List) bool {
+	return value.IsUnknown() || !value.IsNull()
 }
 
 func stringPresent(value types.String) bool {

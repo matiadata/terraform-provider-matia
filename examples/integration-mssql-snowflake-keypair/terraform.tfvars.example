@@ -10,10 +10,11 @@ mssql_password = "your-sqlserver-password"
 mssql_incremental_mode = "Change Stream"
 
 snowflake_account   = "your-snowflake-account"
+snowflake_username  = "your-snowflake-username"
 snowflake_database  = "your-snowflake-database"
 snowflake_warehouse = "your-snowflake-warehouse"
-snowflake_role      = "your-snowflake-role"
-snowflake_username  = "your-snowflake-username"
-snowflake_password  = "your-snowflake-password"
+snowflake_private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+snowflake_private_key_passphrase = null
+snowflake_public_key             = "MIIBIjANBgkq..."
 
 destination_schema = "your-destination-schema-in-snowflake"

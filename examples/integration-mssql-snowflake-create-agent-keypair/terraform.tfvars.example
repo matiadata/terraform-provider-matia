@@ -1,0 +1,23 @@
+matia_api_token = "eyJ..."
+
+hybrid_agent_name        = "your-agent-name-to-create"
+hybrid_agent_description = "your-agent-description-to-create"
+
+mssql_hostname = "your-sqlserver-hostname"
+mssql_port     = "your-sqlserver-port"
+mssql_database = "your-sqlserver-database"
+mssql_tls      = true
+mssql_username = "your-sqlserver-username"
+mssql_password = "your-sqlserver-password"
+
+mssql_incremental_mode = "Change Stream"
+
+snowflake_account   = "your-snowflake-account"
+snowflake_username  = "your-snowflake-username"
+snowflake_database  = "your-snowflake-database"
+snowflake_warehouse = "your-snowflake-warehouse"
+snowflake_private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+snowflake_private_key_passphrase = null
+snowflake_public_key             = "MIIBIjANBgkq..."
+
+destination_schema = "your-destination-schema-in-snowflake"

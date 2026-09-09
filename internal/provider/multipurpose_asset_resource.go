@@ -247,16 +247,18 @@ func (r *multiPurposeAssetResource) ValidateConfig(
 		}
 	}
 
-	// The API validates shared credentials as one flat connection, which needs a database.
-	requiresDatabase := map[string]bool{"credentials": true}
+	// The API validates shared credentials as one flat connection, which needs a
+	// database. It also serves ETL, whose destination resolver reads that field
+	// and not the list, so rows cannot stand in for it here.
+	databaseRules := map[string]databaseRule{"credentials": {required: true}}
 	for _, purpose := range credentialsPurposes {
-		requiresDatabase[purpose.attribute] = purpose.requiresDatabase
+		databaseRules[purpose.attribute] = purpose.database
 	}
 	for attribute, block := range config.credentialBlocks() {
 		if !blockIsSet(block) {
 			continue
 		}
-		issue, diags := snowflakeCredentialsIssue(ctx, block, requiresDatabase[attribute])
+		issue, diags := snowflakeCredentialsIssue(ctx, block, databaseRules[attribute])
 		resp.Diagnostics.Append(diags...)
 		if !diags.HasError() && issue != "" {
 			resp.Diagnostics.AddError("Incomplete Snowflake credentials", "On "+attribute+": "+issue+".")
