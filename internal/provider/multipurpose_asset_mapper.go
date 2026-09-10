@@ -142,6 +142,21 @@ func buildMultiPurposeAssetUpdateRequest(
 		changed = true
 	}
 
+	// The API never returns secrets. Preserve the first-apply import adoption
+	// contract instead of overwriting credentials we have not previously managed.
+	if !state.hasNoCredentials() {
+		for attribute, block := range plan.credentialBlocks() {
+			if block.Equal(state.credentialBlocks()[attribute]) {
+				continue
+			}
+			connection, credDiags := multiPurposeUpdateConnection(ctx, plan)
+			diags.Append(credDiags...)
+			req.Connection = connection
+			changed = true
+			break
+		}
+	}
+
 	var databases, warehouses types.List
 	if !plan.AdditionalDatabases.Equal(state.AdditionalDatabases) {
 		databases = plan.AdditionalDatabases
@@ -155,6 +170,31 @@ func buildMultiPurposeAssetUpdateRequest(
 	}
 
 	return req, changed, diags
+}
+
+// PATCH accepts purpose-shaped connections, but not create's connectionOverrides.
+// Materialize the effective blocks so removing an override restores the shared
+// credentials, and switching credential layouts behaves the same as creation.
+func multiPurposeUpdateConnection(ctx context.Context, plan multiPurposeAssetModel) (map[string]any, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	var shared map[string]any
+	if blockIsSet(plan.Credentials) {
+		var sharedDiags diag.Diagnostics
+		shared, sharedDiags = snowflakeCredentialsToAPI(ctx, plan.Credentials)
+		diags.Append(sharedDiags...)
+	}
+	connection := map[string]any{}
+	for _, purpose := range credentialsPurposes {
+		block := plan.purposeBlocks()[purpose.attribute]
+		if blockIsSet(block) {
+			value, blockDiags := snowflakeCredentialsToAPI(ctx, block)
+			diags.Append(blockDiags...)
+			connection[purpose.apiKey] = value
+		} else if purpose.required && shared != nil {
+			connection[purpose.apiKey] = shared
+		}
+	}
+	return connection, diags
 }
 
 func multiPurposeAssetToModel(

@@ -61,19 +61,12 @@ var credentialsPurposes = []struct {
 	{attribute: "etl_source", apiKey: "etlSource", database: databaseRule{required: true}},
 }
 
-const credentialsReplacementNote = " Changing or removing this block after creation forces resource replacement."
+const credentialsUpdateNote = " Credential changes update the existing asset in place."
 
 func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute {
 	return schema.SingleNestedAttribute{
-		Description: description + credentialsReplacementNote,
+		Description: description + credentialsUpdateNote,
 		Optional:    true,
-		PlanModifiers: []planmodifier.Object{
-			objectplanmodifier.RequiresReplaceIf(
-				replaceUnlessAdoptingImportedCredentials,
-				"Changing or removing credentials forces replacement.",
-				"Changing or removing credentials forces replacement.",
-			),
-		},
 		Attributes: map[string]schema.Attribute{
 			"account": schema.StringAttribute{
 				Description: "Snowflake account identifier (e.g. myorg-myaccount).",
@@ -148,29 +141,30 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 			"public_key": schema.StringAttribute{
 				Description: "Base64 body of the public key, without the BEGIN and END lines, as Snowflake's " +
 					"RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the " +
-					"edit wizard and puts it in the Snowflake setup script. Adding it later replaces the asset.",
+					"edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.",
 				Optional: true,
 			},
 		},
 	}
 }
 
-// The Matia API cannot rewrite the credentials of a multipurpose asset: a nested
-// PATCH is rejected and a flat one is silently dropped. Every credentials change
-// is therefore a replacement, except on an imported asset, whose state holds no
-// credentials at all until the first apply records the configured blocks.
-func replaceUnlessAdoptingImportedCredentials(
-	ctx context.Context,
-	req planmodifier.ObjectRequest,
-	resp *objectplanmodifier.RequiresReplaceIfFuncResponse,
-) {
-	if !req.StateValue.IsNull() {
-		resp.RequiresReplace = true
-		return
+// PATCH upserts supplied purposes but cannot delete one. Keep replacement only
+// when removing the optional ETL-source purpose; shared credentials cover the
+// other three purposes, not this one.
+func snowflakeEtlSourceCredentialsSchema() schema.SingleNestedAttribute {
+	attribute := snowflakeCredentialsSchema(
+		"Credentials Matia uses to read Snowflake as an ETL source. Supplying them enables that purpose. Removing this block forces resource replacement.",
+	)
+	attribute.PlanModifiers = []planmodifier.Object{
+		objectplanmodifier.RequiresReplaceIf(
+			func(_ context.Context, req planmodifier.ObjectRequest, resp *objectplanmodifier.RequiresReplaceIfFuncResponse) {
+				resp.RequiresReplace = req.PlanValue.IsNull() && !req.StateValue.IsNull()
+			},
+			"Removing the ETL-source purpose forces replacement.",
+			"Removing the ETL-source purpose forces replacement.",
+		),
 	}
-	var state multiPurposeAssetModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	resp.RequiresReplace = !state.hasNoCredentials()
+	return attribute
 }
 
 func snowflakeCredentialsToAPI(ctx context.Context, block types.Object) (map[string]any, diag.Diagnostics) {

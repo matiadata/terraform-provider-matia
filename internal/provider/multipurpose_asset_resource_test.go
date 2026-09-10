@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,8 +25,8 @@ import (
 )
 
 // testAccMultiPurposeAssetsServer models the v1 assets API for Snowflake:
-// creation keeps only the ETL default database and warehouse (credentials are
-// never stored or returned), and every request body is kept for assertions.
+// credentials are never returned, ETL defaults follow credential updates, and
+// every request body is kept for assertions.
 type testAccMultiPurposeAssetsServer struct {
 	mu           sync.Mutex
 	assets       map[string]testAccStoredMultiPurposeAsset
@@ -161,6 +162,11 @@ func testAccStartMultiPurposeAssetsServer(t *testing.T) (string, *testAccMultiPu
 					stored.AdditionalWarehouses = *req.Configuration.Etl.AdditionalWarehouses
 				}
 			}
+			if etl, hasEtl := req.Connection["etl"].(map[string]any); hasEtl {
+				stored.DefaultDatabase, _ = etl["database"].(string)
+				stored.DefaultWarehouse, _ = etl["warehouse"].(string)
+			}
+
 			s.assets[id] = stored
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v1/assets/"):
@@ -416,7 +422,7 @@ func TestAccAsset_sharedCredentialsWithOverride(t *testing.T) {
 				),
 			},
 			{
-				// The API cannot add a purpose to an existing asset.
+				// Adding a purpose updates the existing asset.
 				Config: testAccAssetSharedCredentialsConfig(apiURL, apiToken, testAccAssetCatalogOverride+`
   etl_source = {
     account   = "myorg-myaccount"
@@ -428,15 +434,29 @@ func TestAccAsset_sharedCredentialsWithOverride(t *testing.T) {
 `),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
-						plancheck.ExpectResourceAction("matia_asset.test", plancheck.ResourceActionReplace),
+						plancheck.ExpectResourceAction("matia_asset.test", plancheck.ResourceActionUpdate),
 					},
 				},
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("matia_asset.test", "id", "asset-2"),
+					resource.TestCheckResourceAttr("matia_asset.test", "id", "asset-1"),
 					func(_ *terraform.State) error {
-						req := server.lastCreate(t)
-						if len(req.ConnectionOverrides) != 2 {
-							return fmt.Errorf("replacement must carry both overrides: %+v", req.ConnectionOverrides)
+						server.mu.Lock()
+						defer server.mu.Unlock()
+						if len(server.patchBodies) != 1 || len(server.createBodies) != 1 {
+							return errors.New("expected one create and one PATCH")
+						}
+						var req client.UpdateAssetRequest
+						if err := json.Unmarshal(server.patchBodies[0], &req); err != nil {
+							return err
+						}
+						if len(req.Connection) != 4 {
+							return errors.New("PATCH must carry all four purposes")
+						}
+						for purpose, username := range map[string]string{"etl": "MATIA_USER", "reverseEtl": "MATIA_USER", "catalog": "OBS_USER", "etlSource": "SRC_USER"} {
+							block, _ := req.Connection[purpose].(map[string]any)
+							if block["username"] != username {
+								return fmt.Errorf("unexpected credentials for %s", purpose)
+							}
 						}
 						return nil
 					},
@@ -446,7 +466,7 @@ func TestAccAsset_sharedCredentialsWithOverride(t *testing.T) {
 	})
 }
 
-func TestAccAsset_credentialChangeReplaces(t *testing.T) {
+func TestAccAsset_credentialsUpdateAndPurposeRemoval(t *testing.T) {
 	apiURL, server := testAccStartMultiPurposeAssetsServer(t)
 	apiToken := testAccAPIToken(t)
 
@@ -467,10 +487,14 @@ func TestAccAsset_credentialChangeReplaces(t *testing.T) {
 				Config: withSource,
 			},
 			{
-				Config:           rotated,
-				ConfigPlanChecks: expectReplace,
+				Config: rotated,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("matia_asset.test", plancheck.ResourceActionUpdate),
+					},
+				},
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("matia_asset.test", "id", "asset-2"),
+					resource.TestCheckResourceAttr("matia_asset.test", "id", "asset-1"),
 					resource.TestCheckResourceAttr("matia_asset.test", "etl.password", "rotated"),
 				),
 			},
@@ -479,13 +503,13 @@ func TestAccAsset_credentialChangeReplaces(t *testing.T) {
 				Config:           withoutSource,
 				ConfigPlanChecks: expectReplace,
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("matia_asset.test", "id", "asset-3"),
+					resource.TestCheckResourceAttr("matia_asset.test", "id", "asset-2"),
 					resource.TestCheckNoResourceAttr("matia_asset.test", "etl_source"),
 					func(_ *terraform.State) error {
 						server.mu.Lock()
 						defer server.mu.Unlock()
-						if len(server.patchBodies) != 0 {
-							return fmt.Errorf("a credentials change must never PATCH: %d", len(server.patchBodies))
+						if len(server.patchBodies) != 1 {
+							return fmt.Errorf("rotation must PATCH once: %d", len(server.patchBodies))
 						}
 						return nil
 					},
@@ -539,6 +563,36 @@ func TestAccAsset_importAdoptsConfiguredCredentials(t *testing.T) {
 								"adoption must not call the API: %d creates, %d patches",
 								len(server.createBodies), len(server.patchBodies),
 							)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				// Once adopted, a subsequent rotation must persist the new secret.
+				Config: created + strings.Replace(
+					strings.Replace(strings.TrimPrefix(created, testAccProviderConfig(apiURL, apiToken)),
+						`resource "matia_asset" "test"`, `resource "matia_asset" "imported"`, 1),
+					`password  = "etl-secret"`, `password  = "rotated"`, 1),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("matia_asset.imported", plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("matia_asset.test", plancheck.ResourceActionNoop),
+				}},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("matia_asset.imported", "id", "asset-1"),
+					func(_ *terraform.State) error {
+						server.mu.Lock()
+						defer server.mu.Unlock()
+						if len(server.patchBodies) != 1 {
+							return errors.New("expected one PATCH after adoption")
+						}
+						var req client.UpdateAssetRequest
+						if err := json.Unmarshal(server.patchBodies[0], &req); err != nil {
+							return err
+						}
+						etl, _ := req.Connection["etl"].(map[string]any)
+						if etl["password"] != "rotated" {
+							return errors.New("rotation after adoption was not sent")
 						}
 						return nil
 					},
@@ -1163,6 +1217,25 @@ func TestSnowflakeCredentialsToAPI(t *testing.T) {
 		"public_key":  "PLACEHOLDER-PUBLIC-KEY",
 		"authMethod":  "keypair",
 	}, connection)
+}
+
+func TestMultiPurposeMetadataUpdateOmitsManagedCredentials(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	block, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
+		Account: types.StringValue("acct"), Username: types.StringValue("user"),
+		Warehouse: types.StringValue("wh"), Database: types.StringValue("db"), Password: types.StringValue("secret"),
+		DatabaseSchemas: types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}),
+	})
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	state := multiPurposeAssetModel{Name: types.StringValue("before"), Credentials: block}
+	plan := state
+	plan.Name = types.StringValue("after")
+	req, changed, diags := buildMultiPurposeAssetUpdateRequest(ctx, plan, state)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.True(t, changed)
+	require.Equal(t, "after", req.Name)
+	require.Nil(t, req.Connection)
 }
 
 func TestCredentialsAuthMethod(t *testing.T) {

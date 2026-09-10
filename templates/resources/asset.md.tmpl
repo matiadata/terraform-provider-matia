@@ -23,7 +23,8 @@ description: |-
 ## Credentials, state and import
 
 - Credentials are stored in Terraform state, marked sensitive. Matia never returns them, so state holds exactly what the configuration last applied.
-- Matia cannot change the credentials of an existing multipurpose asset. Any change to `credentials`, `etl`, `reverse_etl`, `catalog` or `etl_source`, including adding or removing a block, plans a replacement. Integrations that reference the asset are replaced with it.
+- With Matia API v0.0.2016 or later, credential changes update the existing asset in place and preserve its ID and bound integrations. The provider sends all configured purposes, using shared `credentials` for `etl`, `reverse_etl` and `catalog` unless overridden. Removing one of those overrides restores the shared credentials.
+- Adding or updating `etl_source` also updates in place. Removing `etl_source` still plans replacement because the API cannot delete a purpose; integrations that reference the asset are then replaced with it.
 - After `terraform import`, the credentials blocks are null in state. The next apply records the configured blocks as-is, with a warning, and does not compare them with what Matia stores; no credentials are sent to the API.
 - `owners`, `tags` and `auth_method` are not read back by the provider, so they are null after import. The next apply re-sends configured `owners` and `auth_method`; a configuration that sets `tags` on an imported asset plans a replacement.
 - On a backend that supports multipurpose assets, every new Snowflake asset is created as `multi_purpose`, including those created with `matia_destination` or `matia_source`. Those resources keep working for existing assets; use `matia_asset` for new Snowflake assets.

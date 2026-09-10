@@ -97,9 +97,9 @@ func (r *multiPurposeAssetResource) Schema(_ context.Context, _ resource.SchemaR
 			"destination, a reverse-ETL source, an observability target and optionally an ETL source. " +
 			"Currently supported for Snowflake. Give it shared `credentials`, or one " +
 			"credentials block per purpose; a purpose block set alongside `credentials` replaces the " +
-			"shared credentials for that purpose only. Matia cannot change the credentials of an " +
-			"existing multipurpose asset, so any credentials change forces resource replacement, and " +
-			"every integration bound to the asset is replaced with it.",
+			"shared credentials for that purpose only. Credential changes update the existing asset " +
+			"in place, preserving its ID and bound integrations. Requires Matia API v0.0.2016 or later. " +
+			"Removing etl_source still forces replacement because the API cannot remove that purpose.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "The asset ID assigned by Matia.",
@@ -156,8 +156,8 @@ func (r *multiPurposeAssetResource) Schema(_ context.Context, _ resource.SchemaR
 				},
 			},
 			"credentials": snowflakeCredentialsSchema(
-				"Credentials shared by every purpose. When set, etl, reverse_etl, catalog and etl_source " +
-					"are optional and each one given replaces the shared credentials for that purpose.",
+				"Credentials shared by etl, reverse_etl and catalog. Each purpose block given " +
+					"replaces the shared credentials for that purpose. etl_source is enabled only when explicitly set.",
 			),
 			"etl": snowflakeCredentialsSchema(
 				"Credentials Matia uses to load data into Snowflake. Required unless credentials is set.",
@@ -168,9 +168,7 @@ func (r *multiPurposeAssetResource) Schema(_ context.Context, _ resource.SchemaR
 			"catalog": snowflakeCredentialsSchema(
 				"Credentials Matia uses for observability. Required unless credentials is set.",
 			),
-			"etl_source": snowflakeCredentialsSchema(
-				"Credentials Matia uses to read Snowflake as an ETL source. Supplying them enables that purpose.",
-			),
+			"etl_source": snowflakeEtlSourceCredentialsSchema(),
 			"additional_databases": schema.ListAttribute{
 				Description: "Existing Snowflake databases integrations may load into besides the ETL " +
 					"credentials' default database. Omit it to leave the list unmanaged; set [] to clear it. " +
@@ -202,24 +200,17 @@ func (r *multiPurposeAssetResource) Schema(_ context.Context, _ resource.SchemaR
 			"default_database": schema.StringAttribute{
 				Description: "Database of the ETL credentials, as reported by Matia.",
 				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"default_warehouse": schema.StringAttribute{
 				Description: "Warehouse of the ETL credentials, as reported by Matia.",
 				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 		},
 	}
 }
 
 // Diagnostics about a credentials block are never anchored on the block: Terraform
-// prints the anchored configuration lines, secrets included. Credentials changes
-// are replacements; see replaceUnlessAdoptingImportedCredentials.
+// prints the anchored configuration lines, secrets included.
 func (r *multiPurposeAssetResource) ValidateConfig(
 	ctx context.Context,
 	req resource.ValidateConfigRequest,
