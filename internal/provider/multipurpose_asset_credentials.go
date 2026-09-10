@@ -214,7 +214,24 @@ func snowflakeCredentialsToAPI(ctx context.Context, block types.Object) (map[str
 		}
 		connection["databaseSchemas"] = schemas
 	}
+
+	if method := credentialsAuthMethod(model); method != "" {
+		connection["authMethod"] = method
+	}
 	return connection, diags
+}
+
+func credentialsAuthMethod(model snowflakeCredentialsModel) string {
+	switch {
+	case stringPresent(model.Password):
+		return "password"
+	case !stringPresent(model.PrivateKey):
+		return ""
+	case stringPresent(model.PrivateKeyPassphrase):
+		return "keypair_encrypted"
+	default:
+		return "keypair"
+	}
 }
 
 func databaseSchemaRows(ctx context.Context, list types.List) ([]databaseSchemaModel, diag.Diagnostics) {

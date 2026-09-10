@@ -1161,5 +1161,73 @@ func TestSnowflakeCredentialsToAPI(t *testing.T) {
 		"warehouse":   "wh",
 		"private_key": "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n",
 		"public_key":  "PLACEHOLDER-PUBLIC-KEY",
+		"authMethod":  "keypair",
 	}, connection)
+}
+
+func TestCredentialsAuthMethod(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		model    snowflakeCredentialsModel
+		expected string
+	}{
+		{
+			name:     "password",
+			model:    snowflakeCredentialsModel{Password: types.StringValue("pw")},
+			expected: "password",
+		},
+		{
+			name:     "key pair without a passphrase",
+			model:    snowflakeCredentialsModel{PrivateKey: types.StringValue("pem")},
+			expected: "keypair",
+		},
+		{
+			name: "key pair with an empty passphrase",
+			model: snowflakeCredentialsModel{
+				PrivateKey:           types.StringValue("pem"),
+				PrivateKeyPassphrase: types.StringValue(""),
+			},
+			expected: "keypair",
+		},
+		{
+			name: "key pair with a passphrase",
+			model: snowflakeCredentialsModel{
+				PrivateKey:           types.StringValue("pem"),
+				PrivateKeyPassphrase: types.StringValue("secret"),
+			},
+			expected: "keypair_encrypted",
+		},
+		{
+			name: "password wins over a private key",
+			model: snowflakeCredentialsModel{
+				Password:   types.StringValue("pw"),
+				PrivateKey: types.StringValue("pem"),
+			},
+			expected: "password",
+		},
+		{
+			name:     "no credentials",
+			model:    snowflakeCredentialsModel{},
+			expected: "",
+		},
+		{
+			name:     "a passphrase alone is not a key pair",
+			model:    snowflakeCredentialsModel{PrivateKeyPassphrase: types.StringValue("secret")},
+			expected: "",
+		},
+		{
+			name:     "an unknown private key resolves at apply",
+			model:    snowflakeCredentialsModel{PrivateKey: types.StringUnknown()},
+			expected: "keypair",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, testCase.expected, credentialsAuthMethod(testCase.model))
+		})
+	}
 }
