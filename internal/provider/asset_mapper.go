@@ -71,7 +71,12 @@ func assetToModel(asset *client.Asset, template assetModel) (*assetModel, diag.D
 		authMethod = types.StringNull()
 	}
 
+	agentID := types.StringNull()
+	if asset.Configuration != nil && asset.Configuration.AgentID != nil {
+		agentID = types.StringValue(*asset.Configuration.AgentID)
+	}
 	return &assetModel{
+		AgentID:           agentID,
 		ID:                types.StringValue(asset.AssetID()),
 		Name:              template.Name,
 		Description:       description,

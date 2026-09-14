@@ -12,8 +12,9 @@ provider "matia" {
 }
 
 resource "matia_source" "postgres" {
-  name = "tf-dev-source-postgres"
-  type = "postgres"
+  agent_id = var.hybrid_agent_id
+  name     = "tf-dev-source-postgres"
+  type     = "postgres"
 
   connection_config = jsonencode({
     hostname    = var.postgres_hostname
@@ -52,7 +53,8 @@ resource "matia_integration" "postgres_to_snowflake" {
   source_id          = matia_source.postgres.id
   destination_id     = matia_destination.snowflake.id
   destination_schema = var.destination_schema
-  agent_id           = var.hybrid_agent_id
+  # agent_id is omitted on purpose: the source owns it, and its agent cascades
+  # to every integration on the source.
 
   source_settings = jsonencode({
     incremental_mode = "Change Stream"

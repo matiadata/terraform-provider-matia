@@ -246,3 +246,21 @@ func TestAssetsClient_DecodeInternalAPIFailure(t *testing.T) {
 	require.Error(t, err)
 	require.EqualError(t, err, "API request failed: Invalid connection")
 }
+
+func TestAssetAgentConfigurationJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent any
+		want  string
+	}{
+		{"omitted", nil, `{}`},
+		{"assigned", "agent-a", `{"agentId":"agent-a"}`},
+		{"cleared", (*string)(nil), `{"agentId":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(AssetConfigurationRequest{AgentID: tc.agent})
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(body))
+		})
+	}
+}

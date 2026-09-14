@@ -47,6 +47,9 @@ func TestAccAsset_updatePreservesIntegration(t *testing.T) {
 						mu.Unlock()
 					}
 					switch {
+					case r.Method == http.MethodGet && r.URL.Path == "/v1/assets/source-1":
+						// Existing source used by the destination-only test.
+						integrations.ServeHTTP(w, r)
 					case strings.HasPrefix(r.URL.Path, "/v1/assets"):
 						if r.Method == http.MethodPatch {
 							body, err := io.ReadAll(r.Body)

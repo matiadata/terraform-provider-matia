@@ -35,7 +35,8 @@ type AssetEtlResources struct {
 }
 
 type AssetConfiguration struct {
-	Etl *AssetEtlResources `json:"etl,omitempty"`
+	AgentID *string            `json:"agentId"`
+	Etl     *AssetEtlResources `json:"etl,omitempty"`
 }
 
 // AssetEtlConfigurationRequest is the writable half of AssetEtlResources. A nil
@@ -46,7 +47,9 @@ type AssetEtlConfigurationRequest struct {
 }
 
 type AssetConfigurationRequest struct {
-	Etl *AssetEtlConfigurationRequest `json:"etl,omitempty"`
+	// nil omits the field; a typed nil *string explicitly clears it.
+	AgentID any                           `json:"agentId,omitempty"`
+	Etl     *AssetEtlConfigurationRequest `json:"etl,omitempty"`
 }
 
 // Asset mirrors the fields returned by the Matia assets API that the provider uses.

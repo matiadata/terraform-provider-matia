@@ -8,6 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -16,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/matiadata/terraform-provider-matia/internal/provider/client"
@@ -38,6 +40,7 @@ type assetResource struct {
 }
 
 type assetModel struct {
+	AgentID           types.String `tfsdk:"-"`
 	ID                types.String `tfsdk:"id"`
 	Name              types.String `tfsdk:"name"`
 	Type              types.String `tfsdk:"type"`
@@ -47,6 +50,46 @@ type assetModel struct {
 	AuthMethod        types.String `tfsdk:"auth_method"`
 	IsDraft           types.Bool   `tfsdk:"is_draft"`
 	Tags              types.List   `tfsdk:"tags"`
+}
+
+type sourceModel struct {
+	assetModel
+
+	SourceAgentID types.String `tfsdk:"agent_id"`
+}
+
+type assetModelReader interface {
+	Get(context.Context, any) diag.Diagnostics
+}
+
+func (r *assetResource) getModel(ctx context.Context, data assetModelReader, model *assetModel) diag.Diagnostics {
+	if r.kind != assetKindSource {
+		return data.Get(ctx, model)
+	}
+	var source sourceModel
+	diags := data.Get(ctx, &source)
+	*model = source.assetModel
+	model.AgentID = source.SourceAgentID
+	return diags
+}
+
+func (r *assetResource) setModel(ctx context.Context, state *tfsdk.State, model *assetModel) diag.Diagnostics {
+	if r.kind != assetKindSource {
+		return state.Set(ctx, model)
+	}
+	return state.Set(ctx, sourceModel{assetModel: *model, SourceAgentID: model.AgentID})
+}
+
+func (r *assetResource) ImportState(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	if r.kind != assetKindSource {
+		resp.Diagnostics.AddError("Import not supported", "Destination import is not supported by this resource.")
+		return
+	}
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
 type assetSchemaText struct {
@@ -178,17 +221,24 @@ func (r *assetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			},
 		},
 	}
+	if r.kind == assetKindSource {
+		resp.Schema.Attributes["agent_id"] = schema.StringAttribute{
+			Description: "Hybrid agent for source connection operations. The source owns the agent: assigning or changing it cascades to every integration on this source. Integrations omit agent_id to follow it. Removing this value clears the source binding and leaves the integrations' existing assignments in place, handing ownership back to them. On import, configure the agent returned by the API to retain it.",
+			Optional:    true,
+			Validators:  []validator.String{stringvalidator.LengthAtLeast(1)},
+		}
+	}
 }
 
 func (r *assetResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan assetModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.Plan, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	var config assetModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.Config, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -230,6 +280,9 @@ func (r *assetResource) Create(ctx context.Context, req resource.CreateRequest, 
 		tagIDs,
 	)
 
+	if r.kind == assetKindSource && !plan.AgentID.IsNull() && !plan.AgentID.IsUnknown() {
+		createReq.Configuration = &client.AssetConfigurationRequest{AgentID: plan.AgentID.ValueString()}
+	}
 	asset, err := r.client.Assets.Create(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Failed to create %s", r.kind), err.Error())
@@ -242,12 +295,12 @@ func (r *assetResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+	resp.Diagnostics.Append(r.setModel(ctx, &resp.State, state)...)
 }
 
 func (r *assetResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state assetModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.State, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -272,21 +325,29 @@ func (r *assetResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
+	if r.kind == assetKindSource {
+		if state.Name.IsNull() {
+			state.Name = types.StringValue(asset.Name)
+		}
+		if state.Type.IsNull() {
+			state.Type = types.StringValue(asset.Type)
+		}
+	}
 	newState, diags := assetToModel(asset, state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
+	resp.Diagnostics.Append(r.setModel(ctx, &resp.State, newState)...)
 }
 
 func (r *assetResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state assetModel
 	var config assetModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.Plan, &plan)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.State, &state)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.Config, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -301,6 +362,16 @@ func (r *assetResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	if r.kind == assetKindSource && !plan.AgentID.IsUnknown() && !plan.AgentID.Equal(state.AgentID) {
+		updateReq.Configuration = &client.AssetConfigurationRequest{}
+		if plan.AgentID.IsNull() {
+			updateReq.Configuration.AgentID = (*string)(nil)
+		} else {
+			updateReq.Configuration.AgentID = plan.AgentID.ValueString()
+		}
+		changed = true
 	}
 
 	credentialsChanged := !plan.ConnectionConfig.Equal(state.ConnectionConfig) ||
@@ -331,12 +402,12 @@ func (r *assetResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
+	resp.Diagnostics.Append(r.setModel(ctx, &resp.State, newState)...)
 }
 
 func (r *assetResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state assetModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(r.getModel(ctx, req.State, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}

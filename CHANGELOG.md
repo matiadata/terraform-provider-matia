@@ -4,6 +4,16 @@ All notable changes to this provider are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-14
+
+### Added
+
+- [provider] support source agents and integration inheritance (DEV-47115) (#104)
+
+### Fixed
+
+- [provider] preserve integration IDs during update plans (DEV-47411) (#112)
+
 ## [0.7.0] - 2026-09-10
 
 ### Fixed

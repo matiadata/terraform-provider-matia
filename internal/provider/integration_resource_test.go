@@ -179,6 +179,7 @@ func testAccStartIntegrationsServerFull(
 	patchHook testAccIntegrationPatchHook,
 	seedSchedules map[string]client.ModifyIntegrationRequest,
 	createHook func(body []byte),
+	sourceAgents ...string,
 ) string {
 	t.Helper()
 
@@ -196,6 +197,18 @@ func testAccStartIntegrationsServerFull(
 		defer mu.Unlock()
 
 		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/assets/"):
+			agentJSON := "null"
+			if len(sourceAgents) > 0 {
+				agentJSON = fmt.Sprintf("%q", sourceAgents[0])
+			}
+			_, _ = fmt.Fprintf(
+				w,
+				`{"code":"success","data":{"id":%q,"name":"source","type":"postgres","connectionType":"source","configuration":{"agentId":%s}}}`,
+				strings.TrimPrefix(r.URL.Path, "/v1/assets/"),
+				agentJSON,
+			)
+
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/integrations":
 			body, _ := io.ReadAll(r.Body)
 			if createHook != nil {
@@ -209,9 +222,13 @@ func testAccStartIntegrationsServerFull(
 
 			id := fmt.Sprintf("integration-%d", nextID)
 			nextID++
+			requestedAgent, _ := req.AgentID.(string)
+			if requestedAgent == "" && len(sourceAgents) > 0 {
+				requestedAgent = sourceAgents[0]
+			}
 			var agentID *string
-			if req.AgentID != "" {
-				agentID = &req.AgentID
+			if requestedAgent != "" {
+				agentID = &requestedAgent
 			}
 			store[id] = testAccWithDestinationSelection(
 				testAccIntegrationJSON(id, req.SourceID, req.DestinationID, req.DestinationSchema, agentID),
@@ -754,6 +771,10 @@ resource "matia_integration" "test" {
 				),
 			},
 			{
+				// This step required an explicit null PATCH while an omitted
+				// agent_id meant "detach". The source owns the agent now, so
+				// omitting it keeps the current one; the source in this stub is
+				// unbound, which hands ownership to the integration.
 				Config: testAccProviderConfig(apiURL, apiToken) + `
 resource "matia_integration" "test" {
   source_id          = "source-1"
@@ -762,7 +783,7 @@ resource "matia_integration" "test" {
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckNoResourceAttr("matia_integration.test", "agent_id"),
+					resource.TestCheckResourceAttr("matia_integration.test", "agent_id", "agent-456"),
 					func(s *terraform.State) error {
 						rs, ok := s.RootModule().Resources["matia_integration.test"]
 						if !ok {
@@ -771,13 +792,80 @@ resource "matia_integration" "test" {
 						if rs.Primary.ID != initialID {
 							return fmt.Errorf("integration was replaced: got %q, want %q", rs.Primary.ID, initialID)
 						}
-						if !clearedAgentID {
-							return errors.New("PATCH agentId did not include explicit null")
+						if clearedAgentID {
+							return errors.New(
+								"omitting agent_id sent an explicit null PATCH; it must leave the agent alone",
+							)
 						}
 						return nil
 					},
 				),
 			},
+		},
+	})
+}
+
+// "" is the explicit detach sentinel: it moves an integration back to Matia
+// Cloud. Only meaningful when the source is unbound, since a bound source
+// would cascade the agent straight back.
+func TestAccIntegration_emptyAgentIDDetaches(t *testing.T) {
+	var clearedAgent bool
+	// No sourceAgents, so the stub reports the source as unbound.
+	apiURL := testAccStartIntegrationsServerFull(
+		t,
+		func(_ string, _ client.ModifyIntegrationRequest, rawReq map[string]json.RawMessage) {
+			if raw, ok := rawReq["agentId"]; ok && string(raw) == "null" {
+				clearedAgent = true
+			}
+		},
+		nil,
+		nil,
+	)
+	apiToken := testAccAPIToken(t)
+	withOwnAgent := testAccProviderConfig(apiURL, apiToken) + `
+resource "matia_integration" "test" {
+  source_id          = "source-1"
+  destination_id     = "dest-1"
+  destination_schema = "raw"
+  agent_id           = "agent-own"
+}
+`
+	detached := testAccProviderConfig(apiURL, apiToken) + `
+resource "matia_integration" "test" {
+  source_id          = "source-1"
+  destination_id     = "dest-1"
+  destination_schema = "raw"
+  agent_id           = ""
+}
+`
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: withOwnAgent,
+				Check: resource.TestCheckResourceAttr(
+					"matia_integration.test", "agent_id", "agent-own",
+				),
+			},
+			{
+				Config: detached,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"matia_integration.test", "agent_id", "",
+					),
+					func(*terraform.State) error {
+						if !clearedAgent {
+							return errors.New(
+								`agent_id = "" did not send an explicit null PATCH, so nothing was detached`,
+							)
+						}
+						return nil
+					},
+				),
+			},
+			// Idempotent: the sentinel must not replan a detach every time.
+			{Config: detached, PlanOnly: true, ExpectNonEmptyPlan: false},
 		},
 	})
 }

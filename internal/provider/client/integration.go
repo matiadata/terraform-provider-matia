@@ -72,7 +72,8 @@ type CreateIntegrationRequest struct {
 	OnSchemaUpdate       string         `json:"onSchemaUpdate,omitempty"`
 	Enabled              *bool          `json:"enabled,omitempty"`
 	Tags                 []string       `json:"tags,omitempty"`
-	AgentID              string         `json:"agentId,omitempty"`
+	// Tri-state: nil omits agentId, a string sets it, and (*string)(nil) sends agentId: null.
+	AgentID any `json:"agentId,omitempty"`
 }
 
 type createIntegrationResponse struct {

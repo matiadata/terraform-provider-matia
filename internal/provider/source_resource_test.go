@@ -105,7 +105,7 @@ func testAccStartAssetsServerWithConnectionType(t *testing.T, connectionType str
 			if connectionType != "" {
 				reported = connectionType
 			}
-			store[id] = testAccAssetJSON(id, req.Name, req.Type, reported)
+			store[id] = testAccAssetAgentJSON(testAccAssetJSON(id, req.Name, req.Type, reported), req.Configuration)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"code":"success","data":{"id":%q}}`, id)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/assets/"):
@@ -132,7 +132,19 @@ func testAccStartAssetsServerWithConnectionType(t *testing.T, connectionType str
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			store[id] = testAccApplyAssetPatch(payload, req)
+			var previous map[string]any
+			_ = json.Unmarshal([]byte(payload), &previous)
+			updated := testAccApplyAssetPatch(payload, req)
+			var next map[string]any
+			_ = json.Unmarshal([]byte(updated), &next)
+			if oldConfig, hasConfig := previous["data"].(map[string]any)["configuration"]; hasConfig {
+				next["data"].(map[string]any)["configuration"] = oldConfig
+			}
+			if req.Configuration != nil {
+				next["data"].(map[string]any)["configuration"] = req.Configuration
+			}
+			encoded, _ := json.Marshal(next)
+			store[id] = string(encoded)
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v1/assets/"):
 			id := strings.TrimPrefix(r.URL.Path, "/v1/assets/")
@@ -350,6 +362,65 @@ resource "matia_destination" "test" {
 			{
 				Config:      config("legacy-snowflake-renamed", "rotated"),
 				ExpectError: regexp.MustCompile(`Credentials of a multipurpose asset cannot be changed here`),
+			},
+		},
+	})
+}
+
+// Agent requests use a nested tri-state value: omitted, assigned, or explicit null.
+func testAccAssetAgentJSON(payload string, config *client.AssetConfigurationRequest) string {
+	var envelope map[string]any
+	_ = json.Unmarshal([]byte(payload), &envelope)
+	data := envelope["data"].(map[string]any)
+	if config != nil {
+		data["configuration"] = config
+	}
+	result, _ := json.Marshal(envelope)
+	return string(result)
+}
+
+func TestAccSource_agentLifecycle(t *testing.T) {
+	apiURL := testAccStartAssetsServer(t)
+	config := func(agent string) string {
+		assignment := ""
+		if agent != "" {
+			assignment = fmt.Sprintf("agent_id = %q", agent)
+		}
+		return testAccProviderConfig(apiURL, testAccAPIToken(t)) + fmt.Sprintf(`
+resource "matia_source" "test" {
+  name = "source"
+  type = "postgres"
+  connection_config = jsonencode({hostname = "localhost"})
+  %s
+}
+`, assignment)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config("agent-a"),
+				Check:  resource.TestCheckResourceAttr("matia_source.test", "agent_id", "agent-a"),
+			},
+			{
+				ResourceName:            "matia_source.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"connection_config", "connection_secrets"},
+			},
+			{
+				Config: config("agent-b"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("matia_source.test", "agent_id", "agent-b"),
+					resource.TestCheckResourceAttr("matia_source.test", "id", "asset-1"),
+				),
+			},
+			{
+				Config: config(""),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckNoResourceAttr("matia_source.test", "agent_id"),
+					resource.TestCheckResourceAttr("matia_source.test", "id", "asset-1"),
+				),
 			},
 		},
 	})

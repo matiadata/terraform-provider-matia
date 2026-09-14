@@ -46,6 +46,49 @@ var (
 	_ resource.ResourceWithImportState = &integrationResource{}
 )
 
+// An omitted agent_id is resolved by the backend: it inherits a bound source's
+// agent, and a source's agent change cascades to its integrations. The
+// effective value is therefore only knowable after apply, so plan it unknown
+// whenever this integration is already changing.
+//
+// Reading the source here and planning its current agent as a known value
+// aborts mid-apply with "Provider produced inconsistent final plan" when the
+// same apply also moves the source to a different agent: the plan records the
+// old agent, and the re-plan that follows the source's update reads the new
+// one. An unchanged integration is left alone so plans stay empty - the
+// attribute is Computed, so the prior state carries forward, and a cascade
+// leaves state stale only until the next refresh.
+//
+// Alignment is not validated here either. Rejecting agent_id = "" against the
+// source's current binding fails a configuration that unbinds the source in
+// the same apply, because planning still sees the old binding. The backend
+// enforces it at apply, after the source_id reference has ordered the source's
+// update first.
+func (r *integrationResource) ModifyPlan(
+	ctx context.Context,
+	req resource.ModifyPlanRequest,
+	resp *resource.ModifyPlanResponse,
+) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	var configuredAgent types.String
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("agent_id"), &configuredAgent)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// A written agent_id stands as configured, the "" sentinel included.
+	if !configuredAgent.IsNull() {
+		return
+	}
+	// With agent_id omitted the framework plans the prior state, so an equal
+	// plan and state means nothing about this integration is changing.
+	if req.Plan.Raw.Equal(req.State.Raw) {
+		return
+	}
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("agent_id"), types.StringUnknown())...)
+}
+
 func NewIntegrationResource() resource.Resource {
 	return &integrationResource{}
 }
@@ -86,6 +129,9 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"id": schema.StringAttribute{
 				Description: "Integration ID assigned by Matia.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"name": schema.StringAttribute{
 				Description: "Display name for the integration. When omitted, Matia assigns a default name.",
@@ -121,12 +167,19 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"agent_id": schema.StringAttribute{
 				Description: "Hybrid deployment agent ID for running the integration in your environment. " +
-					"An imported integration keeps the agent the API reports, so write it into the configuration: " +
-					"omitting it plans the agent away and the next apply detaches the integration from it.",
+					"A bound source owns this: assigning or changing the source's agent cascades to its integrations, " +
+					"and omitting the attribute keeps whatever the source cascaded - it reads as known after apply " +
+					"whenever the integration is changing, because the cascade resolves it. Set it only for an " +
+					"integration whose source has no agent - a source Matia Cloud can reach that loads into a " +
+					"destination only the agent can reach. Set it to \"\" to detach that agent and move the " +
+					"integration back to Matia Cloud; the API rejects that while the source is bound, because the " +
+					"source takes precedence, so unbind the source in the same configuration to detach both at " +
+					"once. Naming an agent other than a bound source's is rejected with SOURCE_AGENT_MISMATCH.",
 				Optional: true,
-				Validators: []validator.String{
-					stringvalidator.LengthAtLeast(1),
-				},
+				// Computed so an omitted attribute keeps the server's value rather
+				// than planning null and detaching. No length validator: "" is the
+				// explicit detach sentinel, so it has to reach the provider.
+				Computed: true,
 			},
 			"on_schema_update": schema.StringAttribute{
 				Description: "Schema change policy: enableAll, enableColumnChanges, enableNamespaceChanges, ignoreAll, or pauseConnection.",
@@ -371,7 +424,15 @@ func buildCreateIntegrationRequest(
 	}
 
 	if !plan.AgentID.IsNull() && !plan.AgentID.IsUnknown() {
-		req.AgentID = plan.AgentID.ValueString()
+		// The "" sentinel is sent as an explicit null so a bound source rejects
+		// it with SOURCE_AGENT_MISMATCH. Dropping it instead would let the
+		// backend cascade the source's agent onto an integration whose
+		// configuration asks for none.
+		if plan.AgentID.ValueString() == "" {
+			req.AgentID = (*string)(nil)
+		} else {
+			req.AgentID = plan.AgentID.ValueString()
+		}
 	}
 
 	return req, diags
@@ -417,6 +478,12 @@ func integrationToModel(
 	agentID := types.StringNull()
 	if integration.AgentID != nil {
 		agentID = types.StringValue(*integration.AgentID)
+	} else if !template.AgentID.IsNull() && !template.AgentID.IsUnknown() &&
+		template.AgentID.ValueString() == "" {
+		// The API reports a detached agent as absent. Keeping the "" the
+		// practitioner wrote stops it reading back as a null that differs from
+		// the configuration on every plan.
+		agentID = types.StringValue("")
 	}
 	// An absent settings block carries no selection to refresh from, so the
 	// configured value stands rather than being cleared.
@@ -496,7 +563,8 @@ func buildModifyIntegrationRequest(
 	}
 
 	changed = true
-	if plan.AgentID.IsNull() {
+	// The API detaches on an explicit null, so the "" sentinel is sent as one.
+	if plan.AgentID.IsNull() || plan.AgentID.ValueString() == "" {
 		req.AgentID = (*string)(nil)
 	} else {
 		req.AgentID = plan.AgentID.ValueString()

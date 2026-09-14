@@ -55,6 +55,7 @@ variable "postgres_password" {
 
 ### Optional
 
+- `agent_id` (String) Hybrid agent for source connection operations. The source owns the agent: assigning or changing it cascades to every integration on this source. Integrations omit agent_id to follow it. Removing this value clears the source binding and leaves the integrations' existing assignments in place, handing ownership back to them. On import, configure the agent returned by the API to retain it.
 - `auth_method` (String) The authentication method for the connector (e.g. direct). Defaults to direct.
 - `connection_secrets` (String, Sensitive) JSON object with sensitive connector configuration (e.g. API keys, tokens).
 - `description` (String) A human-readable description of the source asset.
@@ -64,3 +65,16 @@ variable "postgres_password" {
 ### Read-Only
 
 - `id` (String) The asset ID assigned by Matia.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Import preserves the source agent reported by the API.
+# Supply connection_config and connection_secrets separately; the public API
+# does not return credentials. Configure agent_id to retain the binding.
+terraform import matia_source.example source-id
+```
