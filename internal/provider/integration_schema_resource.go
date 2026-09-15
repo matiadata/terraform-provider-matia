@@ -84,14 +84,31 @@ func (r *integrationSchemaResource) Schema(_ context.Context, _ resource.SchemaR
 				MarkdownDescription: "Desired schema selection: the JSON body of `PATCH /v1/integrations/:id/schemas`, " +
 					"with a top-level `schemas` key holding only the tables and fields you want to manage.\n\n" +
 					"  This is **not** the enriched catalog `GET` returns, so do not paste a `GET` response " +
-					"here. Terraform manages only the keys you declare and ignores discovered tables, " +
-					"destination names, columns and primary keys you omit; read `effective_schema` to see " +
-					"the full catalog.\n\n" +
+					"here. Read `effective_schema` to see the full discovered catalog.\n\n" +
+					"  - **Initial selection:** when this Terraform resource is created, it reads the integration's " +
+					"`on_schema_update` policy. `enableAll` preserves unlisted tables and columns. " +
+					"`enableColumnChanges` disables unlisted configurable tables, preserving column defaults. " +
+					"`ignoreAll` also disables unlisted configurable columns. Explicit entries keep their requested " +
+					"settings; listing a table without `enabled` preserves its current table selection. " +
+					"Primary-key columns and non-editable tables are excluded from automatic disables; omitted " +
+					"non-editable tables that may remain enabled produce a warning. Existing " +
+					"column hashing is preserved. `enableNamespaceChanges`, `pauseConnection`, and missing or " +
+					"unrecognized policies preserve unlisted objects.\n" +
+					"  - **Creation timing:** this selection also applies when attaching a new Terraform schema " +
+					"resource to an existing integration, or recreating the resource. Keep the integration " +
+					"`paused = true` until selection finishes if no data should sync beforehand. Restrictive policies " +
+					"wait up to 3 minutes for discovery to return tables, polling every 2 seconds. If discovery " +
+					"does not finish, creation fails without sending a selection PATCH; keep the integration paused " +
+					"and check discovery before retrying. An empty " +
+					"`schemas` map disables every discovered configurable table under either restrictive policy.\n" +
+					"  - **Later applies:** only declared fields are managed. Initial selection is not repeated on " +
+					"refresh or update, including when `on_schema_update` changes; future discovery follows the " +
+					"integration's policy. Automatic disables appear in `effective_schema`, not `config`.\n" +
 					"  - **Removing a table** whose `enabled` you had declared disables it: deleting it " +
 					"from `config` sends `enabled: false` on the next apply. Ownership is per field, so " +
 					"a table you declared without `enabled` (a `syncMode`-only entry, say) is left " +
 					"running - Terraform never turned it on, so removing it does not turn it off - and a " +
-					"table you never declared is untouched entirely. That is what keeps this from " +
+					"table you never declared is untouched on updates. That is what keeps this from " +
 					"undoing the integration's own `on_schema_update` policy. If a removed table cannot " +
 					"be disabled, the apply warns instead of reporting a clean run.\n" +
 					"  - **Settable keys** are a table's `enabled`, `syncMode` and `cursorField`, and a " +
@@ -108,7 +125,9 @@ func (r *integrationSchemaResource) Schema(_ context.Context, _ resource.SchemaR
 					"warns when it finds one.\n" +
 					"  - **Caveat:** a column's `enabled` only takes effect on sources that support " +
 					"field-level data blocking. Elsewhere the API keeps the column enabled and the " +
-					"difference keeps appearing in the plan.",
+					"difference keeps appearing in the plan for declared columns. If the API does not confirm an " +
+					"automatic disable, creation warns; inspect `effective_schema` before syncing because later " +
+					"applies do not retry automatic disables.",
 				Required:   true,
 				CustomType: jsontypes.NormalizedType{},
 				Validators: []validator.String{
@@ -139,9 +158,7 @@ func (r *integrationSchemaResource) Create(
 		return
 	}
 
-	// No prior state on Create, so nothing is owned yet and nothing can have been dropped: the
-	// first apply stays sparse and never disables a table the user has not declared.
-	state, diags := r.applySchema(ctx, plan, plan.Config.ValueString())
+	state, diags := r.applyInitialSchema(ctx, plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -242,6 +259,50 @@ func (r *integrationSchemaResource) Update(
 func (r *integrationSchemaResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
 }
 
+// Initial selection is applied once, when Terraform creates this resource, even when the
+// integration itself already exists. Read and Update continue to manage only declared fields.
+func (r *integrationSchemaResource) applyInitialSchema(
+	ctx context.Context,
+	plan integrationSchemaModel,
+) (*integrationSchemaModel, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	integrationID := plan.IntegrationID.ValueString()
+	if err := r.client.Integrations.WaitForIntegrationReady(ctx, integrationID); err != nil {
+		diags.AddError("Failed waiting for integration to finish creation", err.Error())
+		return nil, diags
+	}
+	integration, err := r.client.Integrations.Get(ctx, integrationID)
+	if err != nil {
+		diags.AddError("Failed to read integration selection policy", err.Error())
+		return nil, diags
+	}
+	if !usesInitialSelection(integration.OnSchemaUpdate) {
+		return r.patchSchema(ctx, plan, plan.Config.ValueString())
+	}
+	catalog, discoveryDiags := waitForInitialSchemaCatalog(ctx, func(pollCtx context.Context) (string, error) {
+		return r.client.Integrations.GetSchemaConfig(pollCtx, integrationID)
+	}, initialSchemaPollInterval)
+	diags.Append(discoveryDiags...)
+	if diags.HasError() {
+		return nil, diags
+	}
+	selection, selectionDiags := buildInitialSchemaSelection(
+		plan.Config.ValueString(),
+		catalog,
+		integration.OnSchemaUpdate,
+	)
+	diags.Append(selectionDiags...)
+	if diags.HasError() {
+		return nil, diags
+	}
+	state, applyDiags := r.patchSchema(ctx, plan, selection.config)
+	diags.Append(applyDiags...)
+	if !diags.HasError() {
+		diags.Append(selection.verify(state.EffectiveSchema.ValueString())...)
+	}
+	return state, diags
+}
+
 // applySchema PATCHes configToSend and stores the result. configToSend is separate from
 // plan.Config because Update also has to disable the tables the plan dropped, which are by
 // definition absent from the text the user wrote - and state must still echo that text verbatim.
@@ -251,22 +312,27 @@ func (r *integrationSchemaResource) applySchema(
 	configToSend string,
 ) (*integrationSchemaModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
-
-	configJSON, prepareDiags := prepareSchemaConfigForAPI(configToSend)
-	diags.Append(prepareDiags...)
-	if diags.HasError() {
-		return nil, diags
-	}
-
 	integrationID := plan.IntegrationID.ValueString()
 	if err := r.client.Integrations.WaitForIntegrationReady(ctx, integrationID); err != nil {
 		diags.AddError("Failed waiting for integration to finish creation", err.Error())
 		return nil, diags
 	}
+	return r.patchSchema(ctx, plan, configToSend)
+}
+
+func (r *integrationSchemaResource) patchSchema(
+	ctx context.Context,
+	plan integrationSchemaModel,
+	configToSend string,
+) (*integrationSchemaModel, diag.Diagnostics) {
+	configJSON, diags := prepareSchemaConfigForAPI(configToSend)
+	if diags.HasError() {
+		return nil, diags
+	}
 
 	// The schemas PATCH replies with the same enriched catalog GET returns, so effective_schema
 	// needs no extra round trip.
-	catalog, err := r.client.Integrations.UpdateSchemaConfig(ctx, integrationID, configJSON)
+	catalog, err := r.client.Integrations.UpdateSchemaConfig(ctx, plan.IntegrationID.ValueString(), configJSON)
 	if err != nil {
 		diags.AddError("Failed to apply integration schema", err.Error())
 		return nil, diags

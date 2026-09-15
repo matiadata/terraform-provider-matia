@@ -13,6 +13,12 @@ Stream and table selection for a Matia integration (PATCH /v1/integrations/:id/s
 ## Example Usage
 
 ```terraform
+# With on_schema_update = "enableColumnChanges" on the integration, initial
+# creation disables unlisted configurable tables and keeps column defaults.
+# With "ignoreAll", unlisted configurable columns are disabled too.
+# With "enableAll", unlisted tables and columns keep their current settings.
+# Keep the integration paused until this selection is applied if data must not
+# sync beforehand. Later applies manage only explicitly declared fields.
 resource "matia_integration_schema" "example" {
   integration_id = var.integration_id
   config = jsonencode({
@@ -47,13 +53,16 @@ output "discovered_schema" {
 
 - `config` (String) Desired schema selection: the JSON body of `PATCH /v1/integrations/:id/schemas`, with a top-level `schemas` key holding only the tables and fields you want to manage.
 
-  This is **not** the enriched catalog `GET` returns, so do not paste a `GET` response here. Terraform manages only the keys you declare and ignores discovered tables, destination names, columns and primary keys you omit; read `effective_schema` to see the full catalog.
+  This is **not** the enriched catalog `GET` returns, so do not paste a `GET` response here. Read `effective_schema` to see the full discovered catalog.
 
-  - **Removing a table** whose `enabled` you had declared disables it: deleting it from `config` sends `enabled: false` on the next apply. Ownership is per field, so a table you declared without `enabled` (a `syncMode`-only entry, say) is left running - Terraform never turned it on, so removing it does not turn it off - and a table you never declared is untouched entirely. That is what keeps this from undoing the integration's own `on_schema_update` policy. If a removed table cannot be disabled, the apply warns instead of reporting a clean run.
+  - **Initial selection:** when this Terraform resource is created, it reads the integration's `on_schema_update` policy. `enableAll` preserves unlisted tables and columns. `enableColumnChanges` disables unlisted configurable tables, preserving column defaults. `ignoreAll` also disables unlisted configurable columns. Explicit entries keep their requested settings; listing a table without `enabled` preserves its current table selection. Primary-key columns and non-editable tables are excluded from automatic disables; omitted non-editable tables that may remain enabled produce a warning. Existing column hashing is preserved. `enableNamespaceChanges`, `pauseConnection`, and missing or unrecognized policies preserve unlisted objects.
+  - **Creation timing:** this selection also applies when attaching a new Terraform schema resource to an existing integration, or recreating the resource. Keep the integration `paused = true` until selection finishes if no data should sync beforehand. Restrictive policies wait up to 3 minutes for discovery to return tables, polling every 2 seconds. If discovery does not finish, creation fails without sending a selection PATCH; keep the integration paused and check discovery before retrying. An empty `schemas` map disables every discovered configurable table under either restrictive policy.
+  - **Later applies:** only declared fields are managed. Initial selection is not repeated on refresh or update, including when `on_schema_update` changes; future discovery follows the integration's policy. Automatic disables appear in `effective_schema`, not `config`.
+  - **Removing a table** whose `enabled` you had declared disables it: deleting it from `config` sends `enabled: false` on the next apply. Ownership is per field, so a table you declared without `enabled` (a `syncMode`-only entry, say) is left running - Terraform never turned it on, so removing it does not turn it off - and a table you never declared is untouched on updates. That is what keeps this from undoing the integration's own `on_schema_update` policy. If a removed table cannot be disabled, the apply warns instead of reporting a clean run.
   - **Settable keys** are a table's `enabled`, `syncMode` and `cursorField`, and a column's `enabled` and `hashed`. Anything else is sent but ignored by the API, so it stays in state without ever taking effect.
   - **Drift detection:** on refresh these keys are compared against the API, so a change made outside Terraform shows up as a diff. Equivalent `syncMode` spellings (`cdc` and `change_stream`) compare equal.
   - **Deliberately not reported as drift:** entries the API cannot write back - ones the catalog no longer lists, flattened subtables, and primary-key columns. Inspect `effective_schema` for their real state. A whole schema the catalog no longer lists is kept too, but then the API rejects every later apply on this resource with `schema not found in integration catalog` until you remove it, so refresh warns when it finds one.
-  - **Caveat:** a column's `enabled` only takes effect on sources that support field-level data blocking. Elsewhere the API keeps the column enabled and the difference keeps appearing in the plan.
+  - **Caveat:** a column's `enabled` only takes effect on sources that support field-level data blocking. Elsewhere the API keeps the column enabled and the difference keeps appearing in the plan for declared columns. If the API does not confirm an automatic disable, creation warns; inspect `effective_schema` before syncing because later applies do not retry automatic disables.
 - `integration_id` (String) Matia integration ID.
 
 ### Read-Only

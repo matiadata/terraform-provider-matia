@@ -182,9 +182,12 @@ func (r *integrationResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Computed: true,
 			},
 			"on_schema_update": schema.StringAttribute{
-				Description: "Schema change policy: enableAll, enableColumnChanges, enableNamespaceChanges, ignoreAll, or pauseConnection.",
-				Optional:    true,
-				Computed:    true,
+				Description: "Schema change policy: enableAll, enableColumnChanges, enableNamespaceChanges, ignoreAll, or pauseConnection. " +
+					"Also determines initial selection when a matia_integration_schema resource is created: " +
+					"enableColumnChanges disables unlisted tables; ignoreAll additionally disables unlisted configurable columns. " +
+					"Other policies preserve unlisted objects. See matia_integration_schema for details.",
+				Optional: true,
+				Computed: true,
 				Validators: []validator.String{
 					stringvalidator.OneOf(
 						"enableAll",

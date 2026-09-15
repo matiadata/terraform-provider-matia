@@ -1,3 +1,9 @@
+# With on_schema_update = "enableColumnChanges" on the integration, initial
+# creation disables unlisted configurable tables and keeps column defaults.
+# With "ignoreAll", unlisted configurable columns are disabled too.
+# With "enableAll", unlisted tables and columns keep their current settings.
+# Keep the integration paused until this selection is applied if data must not
+# sync beforehand. Later applies manage only explicitly declared fields.
 resource "matia_integration_schema" "example" {
   integration_id = var.integration_id
   config = jsonencode({

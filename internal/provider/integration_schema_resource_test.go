@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,9 +29,13 @@ type testAccSchemaCatalogServer struct {
 	URL        string
 	PatchCount *atomic.Int64
 
-	mu        sync.Mutex
-	catalog   map[string]any
-	lastPatch map[string]any
+	mu                   sync.Mutex
+	catalog              map[string]any
+	lastPatch            map[string]any
+	policy               string
+	requests             []string
+	ignoreColumnDisables bool
+	emptyCatalogReads    int
 	// coerceSyncMode makes PATCH accept the request but keep the stored syncMode, the way the real
 	// API treats a mode the source does not support: 200, with the old value silently retained.
 	coerceSyncMode bool
@@ -60,6 +65,7 @@ func testAccStartSchemaCatalogServer(t *testing.T) *testAccSchemaCatalogServer {
 
 	s := &testAccSchemaCatalogServer{
 		PatchCount: &atomic.Int64{},
+		policy:     "enableColumnChanges",
 		catalog: map[string]any{
 			"schemas": map[string]any{
 				"public": map[string]any{
@@ -80,6 +86,7 @@ func testAccStartSchemaCatalogServer(t *testing.T) *testAccSchemaCatalogServer {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.requests = append(s.requests, r.Method+" "+r.URL.Path)
 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/integrations/"+testAccIntegrationSchemaID:
@@ -89,11 +96,19 @@ func testAccStartSchemaCatalogServer(t *testing.T) *testAccSchemaCatalogServer {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(integrationJSON))
+			policyJSON := fmt.Sprintf(`"onSchemaUpdate":%q`, s.policy)
+			payload := strings.Replace(integrationJSON, `"onSchemaUpdate":"enableColumnChanges"`, policyJSON, 1)
+			_, _ = w.Write([]byte(payload))
 		case r.Method == http.MethodDelete && r.URL.Path == "/v1/integrations/"+testAccIntegrationSchemaID:
 			integrationDeleted = true
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && r.URL.Path == schemasPath:
+			if s.emptyCatalogReads > 0 {
+				s.emptyCatalogReads--
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"code":"success","data":{"schemas":{}}}`))
+				return
+			}
 			s.writeCatalogLocked(w)
 		case r.Method == http.MethodPatch && r.URL.Path == schemasPath:
 			s.PatchCount.Add(1)
@@ -177,10 +192,13 @@ func (s *testAccSchemaCatalogServer) applyTableLocked(requestTable, catalogTable
 	for columnName, columnVal := range requestColumns {
 		requestColumn, columnOK := columnVal.(map[string]any)
 		catalogColumn, catalogColumnOK := catalogColumns[columnName].(map[string]any)
-		if !columnOK || !catalogColumnOK {
+		if !columnOK || !catalogColumnOK || catalogColumn["isPrimaryKey"] == true {
 			continue
 		}
 		for _, field := range []string{"enabled", "hashed"} {
+			if field == "enabled" && s.ignoreColumnDisables {
+				continue
+			}
 			if value, fieldOK := requestColumn[field].(bool); fieldOK {
 				catalogColumn[field] = value
 			}
@@ -762,4 +780,96 @@ func TestRefreshIntegrationSchemaModel_PropagatesMissingSchemaWarning(t *testing
 	require.False(t, diags.HasError(), "%v", diags)
 	require.Equal(t, 1, diags.WarningsCount())
 	require.Contains(t, diags.Warnings()[0].Detail(), `"gone"`)
+}
+
+func TestAccIntegrationSchema_initialPolicySelection(t *testing.T) {
+	for _, policy := range []string{"enableColumnChanges", "enableAll", "enableNamespaceChanges", "ignoreAll", "pauseConnection"} {
+		t.Run(policy, func(t *testing.T) {
+			server := testAccStartSchemaCatalogServer(t)
+			server.policy = policy
+			token := testAccAPIToken(t)
+			config := testAccIntegrationSchemaConfig(server.URL, token, `enabled = true`)
+			updated := testAccIntegrationSchemaConfig(server.URL, token, `enabled = true
+            syncMode = "full_refresh"`)
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{Config: config, Check: func(state *terraform.State) error {
+						raw := state.RootModule().Resources["matia_integration_schema.test"].Primary.Attributes["effective_schema"]
+						schemas, diags := parseSchemaCatalog(raw)
+						if diags.HasError() {
+							return fmt.Errorf("invalid catalog: %v", diags)
+						}
+						tables := schemaTables(schemas["public"])
+						enabled, _ := tableEnabled(tables["audit_log"])
+						if enabled != (policy != "enableColumnChanges" && policy != "ignoreAll") {
+							return fmt.Errorf("unexpected audit_log enabled: %v", enabled)
+						}
+						enabled, _ = tableEnabled(tables["users"])
+						if !enabled {
+							return errors.New("explicitly enabled users was disabled")
+						}
+						return nil
+					}},
+					{Config: config, PlanOnly: true, ExpectNonEmptyPlan: false},
+					{
+						PreConfig: func() { server.SetTableField("public", "audit_log", "enabled", true) },
+						Config:    updated,
+						Check: func(*terraform.State) error {
+							server.mu.Lock()
+							defer server.mu.Unlock()
+							schemas := server.catalog["schemas"].(map[string]any)
+							enabled, _ := tableEnabled(schemaTables(schemas["public"])["audit_log"])
+							if !enabled {
+								return errors.New("update reapplied initial defaults to an undeclared table")
+							}
+							return nil
+						},
+					},
+					{Config: updated, PlanOnly: true, ExpectNonEmptyPlan: false},
+				},
+			})
+		})
+	}
+}
+
+func TestAccIntegrationSchema_initialPolicyWaitsForDiscovery(t *testing.T) {
+	for _, policy := range []string{"enableColumnChanges", "ignoreAll"} {
+		t.Run(policy, func(t *testing.T) {
+			server := testAccStartSchemaCatalogServer(t)
+			server.policy = policy
+			server.emptyCatalogReads = 2
+			config := testAccIntegrationSchemaConfig(server.URL, testAccAPIToken(t), `enabled = true`)
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{Config: config, Check: func(*terraform.State) error {
+						if server.TableField("public", "users", "enabled") != true ||
+							server.TableField("public", "audit_log", "enabled") != false {
+							return errors.New("initial selection was not applied after delayed discovery")
+						}
+						if server.PatchCount.Load() != 1 {
+							return errors.New("expected exactly one selection PATCH")
+						}
+						server.mu.Lock()
+						defer server.mu.Unlock()
+						reads := 0
+						for _, request := range server.requests {
+							if strings.HasSuffix(request, "/schemas") && strings.HasPrefix(request, "GET ") {
+								reads++
+							}
+							if strings.HasPrefix(request, "PATCH ") {
+								break
+							}
+						}
+						if reads < 3 {
+							return errors.New("PATCH was sent before discovery became ready")
+						}
+						return nil
+					}},
+					{Config: config, PlanOnly: true, ExpectNonEmptyPlan: false},
+				},
+			})
+		})
+	}
 }
