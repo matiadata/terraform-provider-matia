@@ -185,3 +185,68 @@ func TestBuildAssetUpdateRequest_ClearsDescription(t *testing.T) {
 	require.NotNil(t, req.Description)
 	require.Empty(t, *req.Description)
 }
+
+func TestToStoredConnection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		assetType string
+		input     map[string]any
+		want      map[string]any
+	}{
+		{
+			name:      "postgres create names",
+			assetType: "postgres",
+			input: map[string]any{
+				"hostname": "db", "port": float64(5432), "database": "app", "ssl": true,
+				"replicationSlot": "matia_slot", "publication": "matia_pub",
+				"sshHost": "bastion", "sshPort": float64(22), "sshUser": "matia",
+			},
+			want: map[string]any{
+				"hostname": "db", "port": "5432", "database": "app", "ssl": true,
+				"slot": "matia_slot", "publication": "matia_pub",
+				"ssh_host": "bastion", "ssh_port": "22", "ssh_user": "matia",
+			},
+		},
+		{
+			name:      "postgres stored names stay",
+			assetType: "postgres",
+			input:     map[string]any{"hostname": "db", "port": "5432", "slot": "matia_slot", "ssl": false},
+			want:      map[string]any{"hostname": "db", "port": "5432", "slot": "matia_slot", "ssl": false},
+		},
+		{
+			name:      "postgres ssl default",
+			assetType: "postgres",
+			input:     map[string]any{"hostname": "db", "port": float64(5432)},
+			want:      map[string]any{"hostname": "db", "port": "5432", "ssl": false},
+		},
+		{
+			name:      "mysql create names and defaults",
+			assetType: "mysql",
+			input: map[string]any{
+				"hostname": "db", "port": float64(3306), "vstreamPort": float64(443),
+				"sshHost": "bastion", "sshPort": float64(22), "sshUser": "matia",
+			},
+			want: map[string]any{
+				"hostname": "db", "port": "3306", "vstreamPort": "443",
+				"ssh_host": "bastion", "ssh_port": "22", "ssh_user": "matia",
+				"database": "", "flavor": "mysql",
+			},
+		},
+		{
+			name:      "other types untouched",
+			assetType: "mssql",
+			input:     map[string]any{"hostname": "db", "port": float64(1433)},
+			want:      map[string]any{"hostname": "db", "port": float64(1433)},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, toStoredConnection(tc.assetType, tc.input))
+		})
+	}
+
+	require.Nil(t, toStoredConnection("postgres", nil), "a metadata-only update sends no connection")
+}

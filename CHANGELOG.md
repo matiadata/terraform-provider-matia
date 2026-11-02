@@ -4,6 +4,14 @@ All notable changes to this provider are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-02
+
+### Fixed
+
+- `matia_asset` creates Snowflake assets in the format the Matia API v1 accepts. `public_key` is no longer sent on create (a warning says so), and an unset `auth_method` sends `keyPair`.
+- Updating a Postgres or MySQL source, such as renaming it, no longer fails with `port must be a string`.
+- The Postgres, MySQL and Snowflake examples use the API v1 request format. Snowflake is created as a key-pair `matia_asset` instead of a `matia_destination`.
+
 ## [0.9.0] - 2026-09-15
 
 ### Added

@@ -2,12 +2,12 @@
 page_title: "matia_asset Resource - matia"
 subcategory: ""
 description: |-
-  A multipurpose Matia asset: one connector that integrations can use as an ETL destination, a reverse-ETL source, an observability target and optionally an ETL source. Currently supported for Snowflake. Give it shared credentials, or one credentials block per purpose; a purpose block set alongside credentials replaces the shared credentials for that purpose only. Credential changes update the existing asset in place, preserving its ID and bound integrations. Requires Matia API v0.0.2016 or later. Removing etl_source still forces replacement because the API cannot remove that purpose.
+  A multipurpose Matia asset: one connector that integrations can use as an ETL destination, a reverse-ETL source, an observability target and optionally an ETL source. Currently supported for Snowflake. Give it shared credentials, or one credentials block per purpose; a purpose block set alongside credentials replaces the shared credentials for that purpose only. Credential changes update the existing asset in place, preserving its ID and bound integrations. Creating one requires Matia API v0.0.2162 or later. Removing etl_source still forces replacement because the API cannot remove that purpose.
 ---
 
 # matia_asset (Resource)
 
-A multipurpose Matia asset: one connector that integrations can use as an ETL destination, a reverse-ETL source, an observability target and optionally an ETL source. Currently supported for Snowflake. Give it shared `credentials`, or one credentials block per purpose; a purpose block set alongside `credentials` replaces the shared credentials for that purpose only. Credential changes update the existing asset in place, preserving its ID and bound integrations. Requires Matia API v0.0.2016 or later. Removing etl_source still forces replacement because the API cannot remove that purpose.
+A multipurpose Matia asset: one connector that integrations can use as an ETL destination, a reverse-ETL source, an observability target and optionally an ETL source. Currently supported for Snowflake. Give it shared `credentials`, or one credentials block per purpose; a purpose block set alongside `credentials` replaces the shared credentials for that purpose only. Credential changes update the existing asset in place, preserving its ID and bound integrations. Creating one requires Matia API v0.0.2162 or later. Removing etl_source still forces replacement because the API cannot remove that purpose.
 
 ## Example Usage
 
@@ -18,28 +18,20 @@ resource "matia_asset" "example" {
   type        = "snowflake"
   auth_method = "keyPair"
 
-  # The public key is for the dashboard's setup script; Matia authenticates with the private key.
   credentials = {
     account     = var.snowflake_account
     username    = "MATIA_USER"
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = var.snowflake_private_key
-    public_key  = var.snowflake_public_key
   }
 
-  # Reverse ETL and observability store their databases as database/schema
-  # pairs, which is what the asset's Manage tab lists.
   reverse_etl = {
     account     = var.snowflake_account
     username    = "MATIA_RETL"
+    database    = "MART"
     warehouse   = "RETL_WH"
     private_key = var.snowflake_private_key
-
-    database_schemas = [
-      { database = "MART", schema = "PUBLIC" },
-      { database = "REPORTING", schema = "ANALYTICS" },
-    ]
   }
 
   # Observability runs as its own user, with no default database.
@@ -48,10 +40,6 @@ resource "matia_asset" "example" {
     username    = "MATIA_OBSERVABILITY"
     warehouse   = "OBSERVABILITY_WH"
     private_key = var.snowflake_observability_private_key
-
-    database_schemas = [
-      { database = "RAW", schema = "INFORMATION_SCHEMA" },
-    ]
   }
 
   # Existing databases and warehouses an integration may pick instead of the defaults.
@@ -59,6 +47,7 @@ resource "matia_asset" "example" {
   additional_warehouses = ["BULK_WH"]
 }
 
+# A Postgres source also needs source_settings (see matia_integration).
 resource "matia_integration" "example" {
   source_id             = var.source_id
   destination_id        = matia_asset.example.id
@@ -80,10 +69,6 @@ variable "snowflake_private_key" {
   sensitive = true
 }
 
-variable "snowflake_public_key" {
-  type = string
-}
-
 variable "snowflake_observability_private_key" {
   type      = string
   sensitive = true
@@ -103,19 +88,14 @@ resource "matia_asset" "per_purpose" {
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = var.snowflake_etl_private_key
-    public_key  = var.snowflake_etl_public_key
   }
 
   reverse_etl = {
     account     = var.snowflake_account
     username    = "MATIA_RETL_USER"
+    database    = "MART"
     warehouse   = "SYNC_WH"
     private_key = var.snowflake_reverse_etl_private_key
-    public_key  = var.snowflake_reverse_etl_public_key
-
-    database_schemas = [
-      { database = "MART", schema = "PUBLIC" },
-    ]
   }
 
   # An encrypted private key needs its passphrase alongside.
@@ -125,11 +105,6 @@ resource "matia_asset" "per_purpose" {
     warehouse              = "OBSERVABILITY_WH"
     private_key            = var.snowflake_catalog_private_key
     private_key_passphrase = var.snowflake_catalog_private_key_passphrase
-    public_key             = var.snowflake_catalog_public_key
-
-    database_schemas = [
-      { database = "RAW", schema = "INFORMATION_SCHEMA" },
-    ]
   }
 }
 
@@ -138,17 +113,9 @@ variable "snowflake_etl_private_key" {
   sensitive = true
 }
 
-variable "snowflake_etl_public_key" {
-  type = string
-}
-
 variable "snowflake_reverse_etl_private_key" {
   type      = string
   sensitive = true
-}
-
-variable "snowflake_reverse_etl_public_key" {
-  type = string
 }
 
 variable "snowflake_catalog_private_key" {
@@ -159,10 +126,6 @@ variable "snowflake_catalog_private_key" {
 variable "snowflake_catalog_private_key_passphrase" {
   type      = string
   sensitive = true
-}
-
-variable "snowflake_catalog_public_key" {
-  type = string
 }
 ```
 
@@ -179,7 +142,6 @@ resource "matia_asset" "shared" {
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = var.snowflake_private_key
-    public_key  = var.snowflake_public_key
   }
 }
 ```
@@ -196,7 +158,7 @@ resource "matia_asset" "shared" {
 
 - `additional_databases` (List of String) Existing Snowflake databases integrations may load into besides the ETL credentials' default database. Omit it to leave the list unmanaged; set [] to clear it. Matia trims and de-duplicates names case-insensitively without planning a change.
 - `additional_warehouses` (List of String) Existing Snowflake warehouses integrations may run on besides the ETL credentials' default warehouse. Omit it to leave the list unmanaged; set [] to clear it.
-- `auth_method` (String) The authentication method of the credentials: direct for passwords, keyPair for private keys.
+- `auth_method` (String) The authentication method of the credentials: direct for passwords, keyPair for private keys. The Matia API creates Snowflake assets with keyPair only, which is sent when this is unset.
 - `catalog` (Attributes) Credentials Matia uses for observability. Required unless credentials is set. Credential changes update the existing asset in place. (see [below for nested schema](#nestedatt--catalog))
 - `credentials` (Attributes) Credentials shared by etl, reverse_etl and catalog. Each purpose block given replaces the shared credentials for that purpose. etl_source is enabled only when explicitly set. Credential changes update the existing asset in place. (see [below for nested schema](#nestedatt--credentials))
 - `description` (String) A human-readable description of the asset. Removing it clears the description in Matia.
@@ -224,12 +186,12 @@ Required:
 
 Optional:
 
-- `database` (String) Default database. Required everywhere except on catalog, and on reverse_etl when database_schemas is set instead.
-- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. (see [below for nested schema](#nestedatt--catalog--database_schemas))
-- `password` (String, Sensitive) Password for password authentication. Set this or private_key.
+- `database` (String) Default database. Required everywhere except on catalog. On an existing asset, database_schemas can replace it on reverse_etl.
+- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. The Matia API rejects it whenever it creates an asset, replacements included. (see [below for nested schema](#nestedatt--catalog--database_schemas))
+- `password` (String, Sensitive) Password for password authentication. Set this or private_key. The Matia API creates Snowflake assets with private keys only, so a new or replaced asset needs private_key.
 - `private_key` (String, Sensitive) PKCS#8 PEM private key for key-pair authentication, newlines included. Set this or password.
 - `private_key_passphrase` (String, Sensitive) Passphrase of an encrypted private_key.
-- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.
+- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. The Matia API does not accept it when it creates an asset, so it is sent only with a later credentials change.
 
 <a id="nestedatt--catalog--database_schemas"></a>
 ### Nested Schema for `catalog.database_schemas`
@@ -252,12 +214,12 @@ Required:
 
 Optional:
 
-- `database` (String) Default database. Required everywhere except on catalog, and on reverse_etl when database_schemas is set instead.
-- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. (see [below for nested schema](#nestedatt--credentials--database_schemas))
-- `password` (String, Sensitive) Password for password authentication. Set this or private_key.
+- `database` (String) Default database. Required everywhere except on catalog. On an existing asset, database_schemas can replace it on reverse_etl.
+- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. The Matia API rejects it whenever it creates an asset, replacements included. (see [below for nested schema](#nestedatt--credentials--database_schemas))
+- `password` (String, Sensitive) Password for password authentication. Set this or private_key. The Matia API creates Snowflake assets with private keys only, so a new or replaced asset needs private_key.
 - `private_key` (String, Sensitive) PKCS#8 PEM private key for key-pair authentication, newlines included. Set this or password.
 - `private_key_passphrase` (String, Sensitive) Passphrase of an encrypted private_key.
-- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.
+- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. The Matia API does not accept it when it creates an asset, so it is sent only with a later credentials change.
 
 <a id="nestedatt--credentials--database_schemas"></a>
 ### Nested Schema for `credentials.database_schemas`
@@ -280,12 +242,12 @@ Required:
 
 Optional:
 
-- `database` (String) Default database. Required everywhere except on catalog, and on reverse_etl when database_schemas is set instead.
-- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. (see [below for nested schema](#nestedatt--etl--database_schemas))
-- `password` (String, Sensitive) Password for password authentication. Set this or private_key.
+- `database` (String) Default database. Required everywhere except on catalog. On an existing asset, database_schemas can replace it on reverse_etl.
+- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. The Matia API rejects it whenever it creates an asset, replacements included. (see [below for nested schema](#nestedatt--etl--database_schemas))
+- `password` (String, Sensitive) Password for password authentication. Set this or private_key. The Matia API creates Snowflake assets with private keys only, so a new or replaced asset needs private_key.
 - `private_key` (String, Sensitive) PKCS#8 PEM private key for key-pair authentication, newlines included. Set this or password.
 - `private_key_passphrase` (String, Sensitive) Passphrase of an encrypted private_key.
-- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.
+- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. The Matia API does not accept it when it creates an asset, so it is sent only with a later credentials change.
 
 <a id="nestedatt--etl--database_schemas"></a>
 ### Nested Schema for `etl.database_schemas`
@@ -308,12 +270,12 @@ Required:
 
 Optional:
 
-- `database` (String) Default database. Required everywhere except on catalog, and on reverse_etl when database_schemas is set instead.
-- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. (see [below for nested schema](#nestedatt--etl_source--database_schemas))
-- `password` (String, Sensitive) Password for password authentication. Set this or private_key.
+- `database` (String) Default database. Required everywhere except on catalog. On an existing asset, database_schemas can replace it on reverse_etl.
+- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. The Matia API rejects it whenever it creates an asset, replacements included. (see [below for nested schema](#nestedatt--etl_source--database_schemas))
+- `password` (String, Sensitive) Password for password authentication. Set this or private_key. The Matia API creates Snowflake assets with private keys only, so a new or replaced asset needs private_key.
 - `private_key` (String, Sensitive) PKCS#8 PEM private key for key-pair authentication, newlines included. Set this or password.
 - `private_key_passphrase` (String, Sensitive) Passphrase of an encrypted private_key.
-- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.
+- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. The Matia API does not accept it when it creates an asset, so it is sent only with a later credentials change.
 
 <a id="nestedatt--etl_source--database_schemas"></a>
 ### Nested Schema for `etl_source.database_schemas`
@@ -336,12 +298,12 @@ Required:
 
 Optional:
 
-- `database` (String) Default database. Required everywhere except on catalog, and on reverse_etl when database_schemas is set instead.
-- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. (see [below for nested schema](#nestedatt--reverse_etl--database_schemas))
-- `password` (String, Sensitive) Password for password authentication. Set this or private_key.
+- `database` (String) Default database. Required everywhere except on catalog. On an existing asset, database_schemas can replace it on reverse_etl.
+- `database_schemas` (Attributes List) Databases this purpose works in, each paired with a schema. Matia stores reverse-ETL and catalog databases this way, and its Manage tab reads them from here. On reverse_etl it replaces database. Elsewhere it is recorded alongside database, which etl and etl_source still need: the destination resolver and the ETL source read that single field and never this list. The Matia API rejects it whenever it creates an asset, replacements included. (see [below for nested schema](#nestedatt--reverse_etl--database_schemas))
+- `password` (String, Sensitive) Password for password authentication. Set this or private_key. The Matia API creates Snowflake assets with private keys only, so a new or replaced asset needs private_key.
 - `private_key` (String, Sensitive) PKCS#8 PEM private key for key-pair authentication, newlines included. Set this or password.
 - `private_key_passphrase` (String, Sensitive) Passphrase of an encrypted private_key.
-- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.
+- `public_key` (String) Base64 body of the public key, without the BEGIN and END lines, as Snowflake's RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the edit wizard and puts it in the Snowflake setup script. The Matia API does not accept it when it creates an asset, so it is sent only with a later credentials change.
 
 <a id="nestedatt--reverse_etl--database_schemas"></a>
 ### Nested Schema for `reverse_etl.database_schemas`

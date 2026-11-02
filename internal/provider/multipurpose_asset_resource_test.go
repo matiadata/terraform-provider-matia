@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -95,13 +99,12 @@ func testAccStartMultiPurposeAssetsServer(t *testing.T) (string, *testAccMultiPu
 				return
 			}
 
-			etl := req.Connection
-			if nested, ok := req.Connection["etl"].(map[string]any); ok {
-				etl = nested
+			if err := testAccContractShapeError(body); err != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprintf(w, `{"code":"VALIDATION_FAILED","message":%q}`, err)
+				return
 			}
-			if override, ok := req.ConnectionOverrides["etl"].(map[string]any); ok {
-				etl = override
-			}
+			etl, _ := req.Connection["etl"].(map[string]any)
 			stored := testAccStoredMultiPurposeAsset{
 				Name:                 req.Name,
 				Description:          req.Description,
@@ -178,6 +181,42 @@ func testAccStartMultiPurposeAssetsServer(t *testing.T) (string, *testAccMultiPu
 	}))
 	t.Cleanup(server.Close)
 	return server.URL + "/v1", s
+}
+
+// testAccContractShapeError reports what the v1 create contract would reject in
+// a Snowflake create body, except password and databaseSchemas, which these
+// tests still use to exercise the provider.
+func testAccContractShapeError(body []byte) string {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return err.Error()
+	}
+	if raw["authMethod"] != "keyPair" {
+		return "authMethod must be keyPair"
+	}
+	connection, _ := raw["connection"].(map[string]any)
+	for _, purpose := range []string{"etl", "reverseEtl", "catalog"} {
+		if _, ok := connection[purpose].(map[string]any); !ok {
+			return "connection." + purpose + " is required"
+		}
+	}
+	blockFields := map[string]bool{
+		"account": true, "username": true, "warehouse": true, "database": true,
+		"privateKey": true, "privateKeyPassphrase": true,
+		"password": true, "databaseSchemas": true,
+	}
+	for purpose, block := range connection {
+		fields, ok := block.(map[string]any)
+		if !ok || (purpose != "etl" && purpose != "reverseEtl" && purpose != "catalog" && purpose != "etlSource") {
+			return "connection." + purpose + " is not a purpose"
+		}
+		for field := range fields {
+			if !blockFields[field] {
+				return "connection." + purpose + "." + field + " is not part of the contract"
+			}
+		}
+	}
+	return ""
 }
 
 const testAccAssetPurposeBlocks = `
@@ -305,7 +344,7 @@ func TestAccAsset_basic(t *testing.T) {
 						}
 						wrongRetl := connection["reverseEtl"]["database"] != "MART"
 						wrongSource := connection["etlSource"]["username"] != "SRC_USER" ||
-							connection["etlSource"]["private_key_passphrase"] != "src-passphrase"
+							connection["etlSource"]["privateKeyPassphrase"] != "src-passphrase"
 						if wrongRetl || wrongSource {
 							return fmt.Errorf("unexpected nested connection: %s", raw["connection"])
 						}
@@ -404,18 +443,24 @@ func TestAccAsset_sharedCredentialsWithOverride(t *testing.T) {
 						if req.AuthMethod != "keyPair" || len(req.Owners) != 1 {
 							return fmt.Errorf("authMethod/owners not forwarded: %+v", req)
 						}
-						if req.Connection["username"] != "MATIA_USER" {
-							return fmt.Errorf("shared credentials must be sent flat: %+v", req.Connection)
+						if len(req.Connection) != 3 {
+							return fmt.Errorf("expected etl, reverseEtl and catalog only: %+v", req.Connection)
 						}
-						if _, ok := req.ConnectionOverrides["catalog"]; !ok || len(req.ConnectionOverrides) != 1 {
-							return fmt.Errorf("catalog must be the only override: %+v", req.ConnectionOverrides)
+						shared := map[string]any{
+							"account":    "myorg-myaccount",
+							"username":   "MATIA_USER",
+							"database":   "RAW",
+							"warehouse":  "LOAD_WH",
+							"privateKey": "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n",
 						}
-						if req.Connection["public_key"] != "PLACEHOLDER-PUBLIC-KEY-SHARED" {
-							return fmt.Errorf("shared public_key not forwarded: %+v", req.Connection)
+						for _, purpose := range []string{"etl", "reverseEtl"} {
+							if got := req.Connection[purpose]; !reflect.DeepEqual(got, shared) {
+								return fmt.Errorf("%s must carry the shared credentials: %+v", purpose, got)
+							}
 						}
-						catalogOverride, _ := req.ConnectionOverrides["catalog"].(map[string]any)
-						if catalogOverride["public_key"] != "PLACEHOLDER-PUBLIC-KEY-CATALOG" {
-							return fmt.Errorf("catalog public_key not forwarded: %+v", req.ConnectionOverrides)
+						catalog, _ := req.Connection["catalog"].(map[string]any)
+						if catalog["username"] != "OBS_USER" || catalog["database"] != nil {
+							return fmt.Errorf("catalog must carry its own block only: %+v", catalog)
 						}
 						return nil
 					},
@@ -669,7 +714,7 @@ resource "matia_asset" "test" {
 					testAccAssetConfig(apiURL, apiToken, "warehouse", ""),
 					`    database  = "MART"`, "", 1,
 				),
-				ExpectError: regexp.MustCompile(`On reverse_etl: set database or database_schemas`),
+				ExpectError: regexp.MustCompile(`On reverse_etl: set database, or database_schemas on an existing`),
 			},
 			{
 				// Rows stand in for the database on reverse ETL only. The ETL
@@ -957,7 +1002,7 @@ func mustDatabaseSchemas(t *testing.T, ctx context.Context, rows ...[2]string) t
 	return list
 }
 
-func TestSnowflakeCredentialsToAPISendsDatabaseSchemas(t *testing.T) {
+func TestSnowflakeCredentialsForUpdateSendsDatabaseSchemas(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -973,7 +1018,7 @@ func TestSnowflakeCredentialsToAPISendsDatabaseSchemas(t *testing.T) {
 	})
 	require.False(t, diags.HasError(), diagsSummary(diags))
 
-	connection, diags := snowflakeCredentialsToAPI(ctx, withRows)
+	connection, diags := snowflakeCredentialsForUpdate(ctx, withRows)
 	require.False(t, diags.HasError(), diagsSummary(diags))
 	require.Equal(
 		t,
@@ -996,7 +1041,7 @@ func TestSnowflakeCredentialsToAPISendsDatabaseSchemas(t *testing.T) {
 	})
 	require.False(t, diags.HasError(), diagsSummary(diags))
 
-	connection, diags = snowflakeCredentialsToAPI(ctx, withoutRows)
+	connection, diags = snowflakeCredentialsForUpdate(ctx, withoutRows)
 	require.False(t, diags.HasError(), diagsSummary(diags))
 	require.NotContains(
 		t,
@@ -1081,7 +1126,7 @@ func TestSnowflakeCredentialsIssue(t *testing.T) {
 
 	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), reverseEtlRule)
 	require.False(t, diags.HasError())
-	require.Equal(t, "set database or database_schemas", issue)
+	require.Equal(t, "set database, or database_schemas on an existing asset", issue)
 
 	issue, diags = snowflakeCredentialsIssue(ctx, block(noDatabase), catalogRule)
 	require.False(t, diags.HasError())
@@ -1167,17 +1212,12 @@ resource "matia_asset" "test" {
 						server.mu.Lock()
 						defer server.mu.Unlock()
 						var raw struct {
-							ConnectionOverrides map[string]map[string]any `json:"connectionOverrides"`
-							Connection          map[string]map[string]any `json:"connection"`
+							Connection map[string]map[string]any `json:"connection"`
 						}
 						if err := json.Unmarshal(server.createBodies[0], &raw); err != nil {
 							return err
 						}
-						block := raw.Connection["reverseEtl"]
-						if block == nil {
-							block = raw.ConnectionOverrides["reverseEtl"]
-						}
-						got, err := json.Marshal(block["databaseSchemas"])
+						got, err := json.Marshal(raw.Connection["reverseEtl"]["databaseSchemas"])
 						if err != nil {
 							return err
 						}
@@ -1193,30 +1233,107 @@ resource "matia_asset" "test" {
 	})
 }
 
-func TestSnowflakeCredentialsToAPI(t *testing.T) {
+func TestSnowflakeCredentialsForUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
+	connection, diags := snowflakeCredentialsForUpdate(ctx, testKeyPairCredentialsBlock(t, ctx))
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.Equal(t, map[string]any{
+		"account":                "acct",
+		"username":               "user",
+		"warehouse":              "wh",
+		"database":               "db",
+		"private_key":            "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n",
+		"private_key_passphrase": "PLACEHOLDER-PASSPHRASE",
+		"public_key":             "PLACEHOLDER-PUBLIC-KEY",
+		"authMethod":             "keypair_encrypted",
+	}, connection)
+}
+
+func TestSnowflakeCredentialsForCreate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	connection, diags := snowflakeCredentialsForCreate(ctx, testKeyPairCredentialsBlock(t, ctx))
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.Equal(t, map[string]any{
+		"account":              "acct",
+		"username":             "user",
+		"warehouse":            "wh",
+		"database":             "db",
+		"privateKey":           "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n",
+		"privateKeyPassphrase": "PLACEHOLDER-PASSPHRASE",
+	}, connection, "no public_key and no authMethod: the create contract has neither")
+
+	var model snowflakeCredentialsModel
+	require.False(t, testKeyPairCredentialsBlock(t, ctx).As(ctx, &model, basetypes.ObjectAsOptions{}).HasError())
+	model.Password = types.StringValue("pw")
+	model.DatabaseSchemas = mustDatabaseSchemas(t, ctx, [2]string{"MART", "PUBLIC"})
+	withRejectedFields, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), model)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	connection, diags = snowflakeCredentialsForCreate(ctx, withRejectedFields)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.Equal(t, "pw", connection["password"], "sent so the API rejects it by name")
+	require.Equal(t, []map[string]string{{"database": "MART", "schema": "PUBLIC"}}, connection["databaseSchemas"])
+}
+
+func testKeyPairCredentialsBlock(t *testing.T, ctx context.Context) types.Object {
+	t.Helper()
 	block, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
+		Account:              types.StringValue("acct"),
+		Username:             types.StringValue("user"),
+		Warehouse:            types.StringValue("wh"),
+		Database:             types.StringValue("db"),
+		PrivateKey:           types.StringValue("PLACEHOLDER-PEM-NOT-A-REAL-KEY\n"),
+		PrivateKeyPassphrase: types.StringValue("PLACEHOLDER-PASSPHRASE"),
+		PublicKey:            types.StringValue("PLACEHOLDER-PUBLIC-KEY"),
+		DatabaseSchemas:      types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}),
+	})
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	return block
+}
+
+func TestBuildCreateMultiPurposeAssetRequestWarnsAboutPublicKeys(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	nullBlock := types.ObjectNull(snowflakeCredentialsAttrTypes())
+	withoutPublicKey, diags := types.ObjectValueFrom(ctx, snowflakeCredentialsAttrTypes(), snowflakeCredentialsModel{
 		Account:         types.StringValue("acct"),
-		Username:        types.StringValue("user"),
+		Username:        types.StringValue("etl"),
 		Warehouse:       types.StringValue("wh"),
+		Database:        types.StringValue("db"),
 		PrivateKey:      types.StringValue("PLACEHOLDER-PEM-NOT-A-REAL-KEY\n"),
-		PublicKey:       types.StringValue("PLACEHOLDER-PUBLIC-KEY"),
 		DatabaseSchemas: types.ListNull(types.ObjectType{AttrTypes: databaseSchemaAttrTypes()}),
 	})
 	require.False(t, diags.HasError(), diagsSummary(diags))
+	plan := multiPurposeAssetModel{
+		Name:                 types.StringValue("warehouse"),
+		Type:                 types.StringValue("snowflake"),
+		AuthMethod:           types.StringValue("keyPair"),
+		Owners:               types.ListNull(types.StringType),
+		Tags:                 types.ListNull(types.StringType),
+		Credentials:          testKeyPairCredentialsBlock(t, ctx),
+		Etl:                  withoutPublicKey,
+		ReverseEtl:           nullBlock,
+		Catalog:              testKeyPairCredentialsBlock(t, ctx),
+		EtlSource:            nullBlock,
+		AdditionalDatabases:  types.ListNull(types.StringType),
+		AdditionalWarehouses: types.ListNull(types.StringType),
+	}
 
-	connection, diags := snowflakeCredentialsToAPI(ctx, block)
+	req, diags := buildCreateMultiPurposeAssetRequest(ctx, plan)
 	require.False(t, diags.HasError(), diagsSummary(diags))
-	require.Equal(t, map[string]any{
-		"account":     "acct",
-		"username":    "user",
-		"warehouse":   "wh",
-		"private_key": "PLACEHOLDER-PEM-NOT-A-REAL-KEY\n",
-		"public_key":  "PLACEHOLDER-PUBLIC-KEY",
-		"authMethod":  "keypair",
-	}, connection)
+	require.Len(t, diags.Warnings(), 1)
+	require.Contains(t, diags.Warnings()[0].Detail(), "for: catalog, credentials.")
+	require.ElementsMatch(t, []string{"etl", "reverseEtl", "catalog"}, slices.Collect(maps.Keys(req.Connection)))
+
+	plan.Credentials = nullBlock
+	plan.ReverseEtl = withoutPublicKey
+	plan.Catalog = withoutPublicKey
+	_, diags = buildCreateMultiPurposeAssetRequest(ctx, plan)
+	require.False(t, diags.HasError(), diagsSummary(diags))
+	require.Empty(t, diags.Warnings(), "no block sets a public key")
 }
 
 func TestMultiPurposeMetadataUpdateOmitsManagedCredentials(t *testing.T) {

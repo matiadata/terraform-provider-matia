@@ -1,10 +1,11 @@
 resource "matia_source" "example" {
-  name = "example-postgres-source"
-  type = "postgres"
+  name        = "example-postgres-source"
+  type        = "postgres"
+  auth_method = "direct"
 
   connection_config = jsonencode({
     hostname = var.postgres_hostname
-    port     = "5432"
+    port     = 5432
     database = "postgres"
     ssl      = false
   })

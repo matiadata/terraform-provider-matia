@@ -93,7 +93,7 @@ func TestAccAsset_updatePreservesIntegration(t *testing.T) {
 resource "matia_%[1]s" "test" {
   name               = %[2]q
   type               = "postgres"
-  connection_config  = jsonencode({ hostname = "localhost" })
+  connection_config  = jsonencode({ hostname = "localhost", replicationSlot = "matia_slot" })
   connection_secrets = jsonencode({ password = %[3]q })
 }
 
@@ -159,6 +159,10 @@ resource "matia_integration_schema" "test" {
 									}
 									if patch.Name != patchName || patch.Connection["password"] != updatedSecret {
 										return errors.New("asset PATCH did not carry the expected name and password")
+									}
+									_, sentCreateName := patch.Connection["replicationSlot"]
+									if patch.Connection["slot"] != "matia_slot" || sentCreateName {
+										return fmt.Errorf("asset PATCH sent create names: %v", patch.Connection)
 									}
 									return nil
 								},

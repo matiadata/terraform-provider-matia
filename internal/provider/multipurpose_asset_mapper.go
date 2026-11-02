@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -37,6 +38,9 @@ func (m multiPurposeAssetModel) hasNoCredentials() bool {
 	return true
 }
 
+// keyPairAuthMethod is the only auth method the API creates Snowflake assets with.
+const keyPairAuthMethod = "keyPair"
+
 func buildCreateMultiPurposeAssetRequest(
 	ctx context.Context,
 	plan multiPurposeAssetModel,
@@ -55,29 +59,16 @@ func buildCreateMultiPurposeAssetRequest(
 		return client.CreateAssetRequest{}, diags
 	}
 
-	purposeConnections := map[string]any{}
-	for _, purpose := range credentialsPurposes {
-		block := plan.purposeBlocks()[purpose.attribute]
-		if !blockIsSet(block) {
-			continue
-		}
-		connection, credDiags := snowflakeCredentialsToAPI(ctx, block)
-		diags.Append(credDiags...)
-		purposeConnections[purpose.apiKey] = connection
-	}
+	connection, credDiags := purposeConnections(ctx, plan, snowflakeCredentialsForCreate)
+	diags.Append(credDiags...)
+	diags.Append(warnUnsentPublicKeys(ctx, plan)...)
 	if diags.HasError() {
 		return client.CreateAssetRequest{}, diags
 	}
 
-	connection := purposeConnections
-	var overrides map[string]any
-	if blockIsSet(plan.Credentials) {
-		shared, credDiags := snowflakeCredentialsToAPI(ctx, plan.Credentials)
-		diags.Append(credDiags...)
-		connection = shared
-		if len(purposeConnections) > 0 {
-			overrides = purposeConnections
-		}
+	authMethod := plan.AuthMethod.ValueString()
+	if authMethod == "" {
+		authMethod = keyPairAuthMethod
 	}
 
 	// connectionType stays empty: the API creates every Snowflake asset as multi_purpose.
@@ -85,13 +76,12 @@ func buildCreateMultiPurposeAssetRequest(
 		plan.Name.ValueString(),
 		plan.Type.ValueString(),
 		plan.Description.ValueString(),
-		plan.AuthMethod.ValueString(),
+		authMethod,
 		connection,
 		"",
 		tagIDs,
 	)
 	req.Owners = owners
-	req.ConnectionOverrides = overrides
 	req.Configuration = configurationRequest(ctx, plan.AdditionalDatabases, plan.AdditionalWarehouses, &diags)
 	return req, diags
 }
@@ -149,7 +139,7 @@ func buildMultiPurposeAssetUpdateRequest(
 			if block.Equal(state.credentialBlocks()[attribute]) {
 				continue
 			}
-			connection, credDiags := multiPurposeUpdateConnection(ctx, plan)
+			connection, credDiags := purposeConnections(ctx, plan, snowflakeCredentialsForUpdate)
 			diags.Append(credDiags...)
 			req.Connection = connection
 			changed = true
@@ -172,22 +162,26 @@ func buildMultiPurposeAssetUpdateRequest(
 	return req, changed, diags
 }
 
-// PATCH accepts purpose-shaped connections, but not create's connectionOverrides.
-// Materialize the effective blocks so removing an override restores the shared
-// credentials, and switching credential layouts behaves the same as creation.
-func multiPurposeUpdateConnection(ctx context.Context, plan multiPurposeAssetModel) (map[string]any, diag.Diagnostics) {
+// purposeConnections sends one connection per purpose: a purpose block replaces
+// the shared credentials for that purpose, so removing it restores them.
+// etl_source is enabled only by its own block.
+func purposeConnections(
+	ctx context.Context,
+	plan multiPurposeAssetModel,
+	toAPI snowflakeCredentialsMapper,
+) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	var shared map[string]any
 	if blockIsSet(plan.Credentials) {
 		var sharedDiags diag.Diagnostics
-		shared, sharedDiags = snowflakeCredentialsToAPI(ctx, plan.Credentials)
+		shared, sharedDiags = toAPI(ctx, plan.Credentials)
 		diags.Append(sharedDiags...)
 	}
 	connection := map[string]any{}
 	for _, purpose := range credentialsPurposes {
 		block := plan.purposeBlocks()[purpose.attribute]
 		if blockIsSet(block) {
-			value, blockDiags := snowflakeCredentialsToAPI(ctx, block)
+			value, blockDiags := toAPI(ctx, block)
 			diags.Append(blockDiags...)
 			connection[purpose.apiKey] = value
 		} else if purpose.required && shared != nil {
@@ -195,6 +189,31 @@ func multiPurposeUpdateConnection(ctx context.Context, plan multiPurposeAssetMod
 		}
 	}
 	return connection, diags
+}
+
+func warnUnsentPublicKeys(ctx context.Context, plan multiPurposeAssetModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	var blocks []string
+	for attribute, block := range plan.credentialBlocks() {
+		if !blockIsSet(block) {
+			continue
+		}
+		hasKey, keyDiags := blockHasPublicKey(ctx, block)
+		diags.Append(keyDiags...)
+		if hasKey {
+			blocks = append(blocks, attribute)
+		}
+	}
+	if len(blocks) == 0 {
+		return diags
+	}
+	slices.Sort(blocks)
+	diags.AddWarning(
+		"public_key not sent",
+		"The Matia API does not accept public_key when it creates a Snowflake asset, so it was not sent for: "+
+			strings.Join(blocks, ", ")+". Matia authenticates with private_key.",
+	)
+	return diags
 }
 
 func multiPurposeAssetToModel(

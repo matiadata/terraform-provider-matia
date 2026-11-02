@@ -12,8 +12,9 @@ provider "matia" {
 }
 
 resource "matia_source" "mysql" {
-  name = "tf-dev-source-mysql"
-  type = "mysql"
+  name        = "tf-dev-source-mysql"
+  type        = "mysql"
+  auth_method = "direct"
 
   connection_config = jsonencode({
     hostname = var.mysql_hostname
@@ -49,11 +50,6 @@ resource "matia_integration" "mysql_to_bq" {
   source_id          = matia_source.mysql.id
   destination_id     = matia_destination.bigquery.id
   destination_schema = var.destination_schema
-
-  source_settings = jsonencode({
-    incremental_mode = "Change Stream"
-    max_clients      = 4
-  })
 }
 
 resource "matia_integration_schedule" "mysql_to_bq" {
@@ -69,7 +65,7 @@ resource "matia_integration_schema" "mysql_to_bq" {
         tables = {
           users = {
             enabled  = true
-            syncMode = "incremental" # MySQL CDC uses incremental + source_settings.incremental_mode
+            syncMode = "incremental"
           }
         }
       }
@@ -108,7 +104,8 @@ variable "mysql_hostname" {
 }
 
 variable "mysql_port" {
-  type = string
+  type    = number
+  default = 3306
 }
 
 variable "mysql_database" {

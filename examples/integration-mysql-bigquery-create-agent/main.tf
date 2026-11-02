@@ -17,8 +17,9 @@ resource "matia_hybrid_deployment_agent" "example" {
 }
 
 resource "matia_source" "mysql" {
-  name = "tf-dev-source-mysql"
-  type = "mysql"
+  name        = "tf-dev-source-mysql"
+  type        = "mysql"
+  auth_method = "direct"
 
   connection_config = jsonencode({
     hostname = var.mysql_hostname
@@ -55,11 +56,6 @@ resource "matia_integration" "mysql_to_bq" {
   destination_id     = matia_destination.bigquery.id
   destination_schema = var.destination_schema
   agent_id           = matia_hybrid_deployment_agent.example.id
-
-  source_settings = jsonencode({
-    incremental_mode = "Change Stream"
-    max_clients      = 4
-  })
 }
 
 resource "matia_integration_schedule" "mysql_to_bq" {
@@ -134,7 +130,8 @@ variable "mysql_hostname" {
 }
 
 variable "mysql_port" {
-  type = string
+  type    = number
+  default = 3306
 }
 
 variable "mysql_database" {

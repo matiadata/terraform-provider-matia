@@ -87,19 +87,18 @@ func (a *Asset) OwnerIDs() []string {
 }
 
 // CreateAssetRequest is the POST /v1/assets body. Sources and destinations set
-// ConnectionType; a multi-purpose Snowflake asset omits it and carries either a
-// shared Connection plus ConnectionOverrides or one Connection block per purpose.
+// ConnectionType; a multi-purpose Snowflake asset omits it and carries one
+// Connection block per purpose.
 type CreateAssetRequest struct {
-	Name                string                     `json:"name"`
-	Type                string                     `json:"type"`
-	Description         string                     `json:"description,omitempty"`
-	Connection          map[string]any             `json:"connection"`
-	ConnectionOverrides map[string]any             `json:"connectionOverrides,omitempty"`
-	ConnectionType      string                     `json:"connectionType,omitempty"`
-	Owners              []string                   `json:"owners"`
-	AuthMethod          string                     `json:"authMethod,omitempty"`
-	Tags                []string                   `json:"tags,omitempty"`
-	Configuration       *AssetConfigurationRequest `json:"configuration,omitempty"`
+	Name           string                     `json:"name"`
+	Type           string                     `json:"type"`
+	Description    string                     `json:"description,omitempty"`
+	Connection     map[string]any             `json:"connection"`
+	ConnectionType string                     `json:"connectionType,omitempty"`
+	Owners         []string                   `json:"owners"`
+	AuthMethod     string                     `json:"authMethod,omitempty"`
+	Tags           []string                   `json:"tags,omitempty"`
+	Configuration  *AssetConfigurationRequest `json:"configuration,omitempty"`
 }
 
 // UpdateAssetRequest is the PATCH /v1/assets/:id body. Description and Owners

@@ -14,12 +14,13 @@ A Matia source asset - a connector Matia reads data from. A Snowflake asset crea
 
 ```terraform
 resource "matia_source" "example" {
-  name = "example-postgres-source"
-  type = "postgres"
+  name        = "example-postgres-source"
+  type        = "postgres"
+  auth_method = "direct"
 
   connection_config = jsonencode({
     hostname = var.postgres_hostname
-    port     = "5432"
+    port     = 5432
     database = "postgres"
     ssl      = false
   })
@@ -56,7 +57,7 @@ variable "postgres_password" {
 ### Optional
 
 - `agent_id` (String) Hybrid agent for source connection operations. The source owns the agent: assigning or changing it cascades to every integration on this source. Integrations omit agent_id to follow it. Removing this value clears the source binding and leaves the integrations' existing assignments in place, handing ownership back to them. On import, configure the agent returned by the API to retain it.
-- `auth_method` (String) The authentication method for the connector (e.g. direct). Defaults to direct.
+- `auth_method` (String) The authentication method for the connector (e.g. direct, ssh). Required by every connector in the Matia API v1 reference; nothing is sent when it is unset.
 - `connection_secrets` (String, Sensitive) JSON object with sensitive connector configuration (e.g. API keys, tokens).
 - `description` (String) A human-readable description of the source asset.
 - `is_draft` (Boolean) Whether the asset is created as a draft. Changing this forces resource replacement.

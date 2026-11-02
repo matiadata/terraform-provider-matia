@@ -12,16 +12,17 @@ provider "matia" {
 }
 
 resource "matia_source" "postgres" {
-  name = "tf-dev-source-postgres"
-  type = "postgres"
+  name        = "tf-dev-source-postgres"
+  type        = "postgres"
+  auth_method = "direct"
 
   connection_config = jsonencode({
-    hostname    = var.postgres_hostname
-    port        = var.postgres_port
-    database    = var.postgres_database
-    ssl         = var.postgres_ssl
-    slot        = var.postgres_slot
-    publication = var.postgres_publication
+    hostname        = var.postgres_hostname
+    port            = var.postgres_port
+    database        = var.postgres_database
+    ssl             = var.postgres_ssl
+    replicationSlot = var.postgres_slot
+    publication     = var.postgres_publication
   })
 
   connection_secrets = jsonencode({
@@ -30,32 +31,31 @@ resource "matia_source" "postgres" {
   })
 }
 
-resource "matia_destination" "snowflake" {
-  name = "tf-dev-destination-snowflake"
-  type = "snowflake"
+resource "matia_asset" "snowflake" {
+  name        = "tf-dev-snowflake"
+  type        = "snowflake"
+  auth_method = "keyPair"
 
-  connection_config = jsonencode({
-    account   = var.snowflake_account
-    database  = var.snowflake_database
-    warehouse = var.snowflake_warehouse
-    role      = var.snowflake_role
-    username  = var.snowflake_username
-  })
-
-  connection_secrets = jsonencode({
-    password = var.snowflake_password
-  })
+  # One user for every purpose.
+  credentials = {
+    account                = var.snowflake_account
+    username               = var.snowflake_username
+    database               = var.snowflake_database
+    warehouse              = var.snowflake_warehouse
+    private_key            = var.snowflake_private_key
+    private_key_passphrase = var.snowflake_private_key_passphrase
+  }
 }
 
 resource "matia_integration" "postgres_to_snowflake" {
   name               = "tf-dev-postgres-to-snowflake"
   source_id          = matia_source.postgres.id
-  destination_id     = matia_destination.snowflake.id
+  destination_id     = matia_asset.snowflake.id
   destination_schema = var.destination_schema
 
   source_settings = jsonencode({
-    incremental_mode = "Change Stream"
-    max_clients      = 4
+    incrementalMode = "cdc"
+    maxClients      = 4
   })
 }
 
@@ -91,8 +91,8 @@ output "source_id" {
 }
 
 output "destination_id" {
-  description = "Snowflake destination asset ID"
-  value       = matia_destination.snowflake.id
+  description = "Snowflake asset ID the integration loads into"
+  value       = matia_asset.snowflake.id
 }
 
 variable "matia_api_token" {
@@ -110,7 +110,8 @@ variable "postgres_hostname" {
 }
 
 variable "postgres_port" {
-  type = string
+  type    = number
+  default = 5432
 }
 
 variable "postgres_database" {
@@ -145,6 +146,10 @@ variable "snowflake_account" {
   type = string
 }
 
+variable "snowflake_username" {
+  type = string
+}
+
 variable "snowflake_database" {
   type = string
 }
@@ -153,17 +158,17 @@ variable "snowflake_warehouse" {
   type = string
 }
 
-variable "snowflake_role" {
-  type = string
+variable "snowflake_private_key" {
+  type        = string
+  sensitive   = true
+  description = "PKCS#8 PEM private key, newlines included."
 }
 
-variable "snowflake_username" {
-  type = string
-}
-
-variable "snowflake_password" {
-  type      = string
-  sensitive = true
+variable "snowflake_private_key_passphrase" {
+  type        = string
+  sensitive   = true
+  default     = null
+  description = "Passphrase of the private key, when it is encrypted."
 }
 
 variable "destination_schema" {

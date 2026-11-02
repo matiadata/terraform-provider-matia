@@ -4,28 +4,20 @@ resource "matia_asset" "example" {
   type        = "snowflake"
   auth_method = "keyPair"
 
-  # The public key is for the dashboard's setup script; Matia authenticates with the private key.
   credentials = {
     account     = var.snowflake_account
     username    = "MATIA_USER"
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = var.snowflake_private_key
-    public_key  = var.snowflake_public_key
   }
 
-  # Reverse ETL and observability store their databases as database/schema
-  # pairs, which is what the asset's Manage tab lists.
   reverse_etl = {
     account     = var.snowflake_account
     username    = "MATIA_RETL"
+    database    = "MART"
     warehouse   = "RETL_WH"
     private_key = var.snowflake_private_key
-
-    database_schemas = [
-      { database = "MART", schema = "PUBLIC" },
-      { database = "REPORTING", schema = "ANALYTICS" },
-    ]
   }
 
   # Observability runs as its own user, with no default database.
@@ -34,10 +26,6 @@ resource "matia_asset" "example" {
     username    = "MATIA_OBSERVABILITY"
     warehouse   = "OBSERVABILITY_WH"
     private_key = var.snowflake_observability_private_key
-
-    database_schemas = [
-      { database = "RAW", schema = "INFORMATION_SCHEMA" },
-    ]
   }
 
   # Existing databases and warehouses an integration may pick instead of the defaults.
@@ -45,6 +33,7 @@ resource "matia_asset" "example" {
   additional_warehouses = ["BULK_WH"]
 }
 
+# A Postgres source also needs source_settings (see matia_integration).
 resource "matia_integration" "example" {
   source_id             = var.source_id
   destination_id        = matia_asset.example.id
@@ -64,10 +53,6 @@ variable "snowflake_account" {
 variable "snowflake_private_key" {
   type      = string
   sensitive = true
-}
-
-variable "snowflake_public_key" {
-  type = string
 }
 
 variable "snowflake_observability_private_key" {

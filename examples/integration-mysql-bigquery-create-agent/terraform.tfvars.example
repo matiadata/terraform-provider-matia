@@ -8,7 +8,7 @@ bigquery_client_email = "your-sa@your-project.iam.gserviceaccount.com"
 destination_schema = "your-destination-schema-in-bigquery"
 
 mysql_hostname = "your-mysql-hostname"
-mysql_port     = "your-mysql-port"
+mysql_port     = 3306
 mysql_database = "your-mysql-database"
 mysql_username = "your-mysql-username"
 mysql_password = "your-mysql-password"

@@ -98,7 +98,7 @@ func (r *multiPurposeAssetResource) Schema(_ context.Context, _ resource.SchemaR
 			"Currently supported for Snowflake. Give it shared `credentials`, or one " +
 			"credentials block per purpose; a purpose block set alongside `credentials` replaces the " +
 			"shared credentials for that purpose only. Credential changes update the existing asset " +
-			"in place, preserving its ID and bound integrations. Requires Matia API v0.0.2016 or later. " +
+			"in place, preserving its ID and bound integrations. Creating one requires Matia API v0.0.2162 or later. " +
 			"Removing etl_source still forces replacement because the API cannot remove that purpose.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -132,8 +132,9 @@ func (r *multiPurposeAssetResource) Schema(_ context.Context, _ resource.SchemaR
 				Optional:    true,
 			},
 			"auth_method": schema.StringAttribute{
-				Description: "The authentication method of the credentials: direct for passwords, keyPair for private keys.",
-				Optional:    true,
+				Description: "The authentication method of the credentials: direct for passwords, keyPair for private keys. " +
+					"The Matia API creates Snowflake assets with keyPair only, which is sent when this is unset.",
+				Optional: true,
 				Validators: []validator.String{
 					stringvalidator.OneOf("direct", "keyPair"),
 				},
@@ -238,9 +239,8 @@ func (r *multiPurposeAssetResource) ValidateConfig(
 		}
 	}
 
-	// The API validates shared credentials as one flat connection, which needs a
-	// database. It also serves ETL, whose destination resolver reads that field
-	// and not the list, so rows cannot stand in for it here.
+	// Shared credentials may fill in for etl, which needs database; the list
+	// cannot replace it.
 	databaseRules := map[string]databaseRule{"credentials": {required: true}}
 	for _, purpose := range credentialsPurposes {
 		databaseRules[purpose.attribute] = purpose.database

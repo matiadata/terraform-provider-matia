@@ -10,6 +10,5 @@ resource "matia_asset" "shared" {
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = var.snowflake_private_key
-    public_key  = var.snowflake_public_key
   }
 }

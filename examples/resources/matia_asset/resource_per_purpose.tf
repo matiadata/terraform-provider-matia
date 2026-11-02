@@ -10,19 +10,14 @@ resource "matia_asset" "per_purpose" {
     database    = "RAW"
     warehouse   = "LOAD_WH"
     private_key = var.snowflake_etl_private_key
-    public_key  = var.snowflake_etl_public_key
   }
 
   reverse_etl = {
     account     = var.snowflake_account
     username    = "MATIA_RETL_USER"
+    database    = "MART"
     warehouse   = "SYNC_WH"
     private_key = var.snowflake_reverse_etl_private_key
-    public_key  = var.snowflake_reverse_etl_public_key
-
-    database_schemas = [
-      { database = "MART", schema = "PUBLIC" },
-    ]
   }
 
   # An encrypted private key needs its passphrase alongside.
@@ -32,11 +27,6 @@ resource "matia_asset" "per_purpose" {
     warehouse              = "OBSERVABILITY_WH"
     private_key            = var.snowflake_catalog_private_key
     private_key_passphrase = var.snowflake_catalog_private_key_passphrase
-    public_key             = var.snowflake_catalog_public_key
-
-    database_schemas = [
-      { database = "RAW", schema = "INFORMATION_SCHEMA" },
-    ]
   }
 }
 
@@ -45,17 +35,9 @@ variable "snowflake_etl_private_key" {
   sensitive = true
 }
 
-variable "snowflake_etl_public_key" {
-  type = string
-}
-
 variable "snowflake_reverse_etl_private_key" {
   type      = string
   sensitive = true
-}
-
-variable "snowflake_reverse_etl_public_key" {
-  type = string
 }
 
 variable "snowflake_catalog_private_key" {
@@ -68,6 +50,3 @@ variable "snowflake_catalog_private_key_passphrase" {
   sensitive = true
 }
 
-variable "snowflake_catalog_public_key" {
-  type = string
-}

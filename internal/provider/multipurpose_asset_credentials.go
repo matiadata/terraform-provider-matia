@@ -90,8 +90,8 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 				},
 			},
 			"database": schema.StringAttribute{
-				Description: "Default database. Required everywhere except on catalog, and on reverse_etl " +
-					"when database_schemas is set instead.",
+				Description: "Default database. Required everywhere except on catalog. On an existing asset, " +
+					"database_schemas can replace it on reverse_etl.",
 				Optional: true,
 			},
 			"database_schemas": schema.ListNestedAttribute{
@@ -99,7 +99,8 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 					"reverse-ETL and catalog databases this way, and its Manage tab reads them from here. " +
 					"On reverse_etl it replaces database. Elsewhere it is recorded alongside database, " +
 					"which etl and etl_source still need: the destination resolver and the ETL source read " +
-					"that single field and never this list.",
+					"that single field and never this list. The Matia API rejects it whenever it creates an asset, " +
+					"replacements included.",
 				Optional: true,
 				Validators: []validator.List{
 					listvalidator.SizeAtLeast(1),
@@ -124,9 +125,10 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 				},
 			},
 			"password": schema.StringAttribute{
-				Description: "Password for password authentication. Set this or private_key.",
-				Optional:    true,
-				Sensitive:   true,
+				Description: "Password for password authentication. Set this or private_key. The Matia API " +
+					"creates Snowflake assets with private keys only, so a new or replaced asset needs private_key.",
+				Optional:  true,
+				Sensitive: true,
 			},
 			"private_key": schema.StringAttribute{
 				Description: "PKCS#8 PEM private key for key-pair authentication, newlines included. Set this or password.",
@@ -141,7 +143,8 @@ func snowflakeCredentialsSchema(description string) schema.SingleNestedAttribute
 			"public_key": schema.StringAttribute{
 				Description: "Base64 body of the public key, without the BEGIN and END lines, as Snowflake's " +
 					"RSA_PUBLIC_KEY expects. Matia never authenticates with it: the dashboard shows it in the " +
-					"edit wizard and puts it in the Snowflake setup script. Adding it later updates the asset in place.",
+					"edit wizard and puts it in the Snowflake setup script. The Matia API does not accept it " +
+					"when it creates an asset, so it is sent only with a later credentials change.",
 				Optional: true,
 			},
 		},
@@ -167,14 +170,16 @@ func snowflakeEtlSourceCredentialsSchema() schema.SingleNestedAttribute {
 	return attribute
 }
 
-func snowflakeCredentialsToAPI(ctx context.Context, block types.Object) (map[string]any, diag.Diagnostics) {
+type snowflakeCredentialsMapper func(context.Context, types.Object) (map[string]any, diag.Diagnostics)
+
+func snowflakeCredentialsForUpdate(ctx context.Context, block types.Object) (map[string]any, diag.Diagnostics) {
 	var model snowflakeCredentialsModel
 	diags := block.As(ctx, &model, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
 		return nil, diags
 	}
 
-	fields := map[string]types.String{
+	connection := knownNonEmptyStrings(map[string]types.String{
 		"account":                model.Account,
 		"username":               model.Username,
 		"warehouse":              model.Warehouse,
@@ -183,36 +188,74 @@ func snowflakeCredentialsToAPI(ctx context.Context, block types.Object) (map[str
 		"private_key":            model.PrivateKey,
 		"private_key_passphrase": model.PrivateKeyPassphrase,
 		"public_key":             model.PublicKey,
-	}
-
-	connection := map[string]any{}
-	for key, value := range fields {
-		if value.IsNull() || value.IsUnknown() || value.ValueString() == "" {
-			continue
-		}
-		connection[key] = value.ValueString()
-	}
-
-	rows, rowDiags := databaseSchemaRows(ctx, model.DatabaseSchemas)
-	diags.Append(rowDiags...)
+	})
+	diags.Append(addDatabaseSchemas(ctx, connection, model.DatabaseSchemas)...)
 	if diags.HasError() {
 		return nil, diags
-	}
-	if len(rows) > 0 {
-		schemas := make([]map[string]string, 0, len(rows))
-		for _, row := range rows {
-			schemas = append(schemas, map[string]string{
-				"database": row.Database.ValueString(),
-				"schema":   row.Schema.ValueString(),
-			})
-		}
-		connection["databaseSchemas"] = schemas
 	}
 
 	if method := credentialsAuthMethod(model); method != "" {
 		connection["authMethod"] = method
 	}
 	return connection, diags
+}
+
+// password and database_schemas have no create field; they are still sent so the
+// API rejects them by name instead of creating the asset without them.
+func snowflakeCredentialsForCreate(ctx context.Context, block types.Object) (map[string]any, diag.Diagnostics) {
+	var model snowflakeCredentialsModel
+	diags := block.As(ctx, &model, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	connection := knownNonEmptyStrings(map[string]types.String{
+		"account":              model.Account,
+		"username":             model.Username,
+		"warehouse":            model.Warehouse,
+		"database":             model.Database,
+		"password":             model.Password,
+		"privateKey":           model.PrivateKey,
+		"privateKeyPassphrase": model.PrivateKeyPassphrase,
+	})
+	diags.Append(addDatabaseSchemas(ctx, connection, model.DatabaseSchemas)...)
+	if diags.HasError() {
+		return nil, diags
+	}
+	return connection, diags
+}
+
+func knownNonEmptyStrings(fields map[string]types.String) map[string]any {
+	values := map[string]any{}
+	for key, value := range fields {
+		if value.IsNull() || value.IsUnknown() || value.ValueString() == "" {
+			continue
+		}
+		values[key] = value.ValueString()
+	}
+	return values
+}
+
+func addDatabaseSchemas(ctx context.Context, connection map[string]any, list types.List) diag.Diagnostics {
+	rows, diags := databaseSchemaRows(ctx, list)
+	if diags.HasError() || len(rows) == 0 {
+		return diags
+	}
+	schemas := make([]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		schemas = append(schemas, map[string]string{
+			"database": row.Database.ValueString(),
+			"schema":   row.Schema.ValueString(),
+		})
+	}
+	connection["databaseSchemas"] = schemas
+	return diags
+}
+
+func blockHasPublicKey(ctx context.Context, block types.Object) (bool, diag.Diagnostics) {
+	var model snowflakeCredentialsModel
+	diags := block.As(ctx, &model, basetypes.ObjectAsOptions{})
+	return !diags.HasError() && stringPresent(model.PublicKey), diags
 }
 
 func credentialsAuthMethod(model snowflakeCredentialsModel) string {
@@ -265,7 +308,7 @@ func snowflakeCredentialsIssue(
 		return "", diags
 	}
 	if database.rowsMayReplace {
-		return "set database or database_schemas", diags
+		return "set database, or database_schemas on an existing asset", diags
 	}
 	return "set database", diags
 }

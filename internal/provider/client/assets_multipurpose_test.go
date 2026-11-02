@@ -46,10 +46,7 @@ func TestAssetsClient_MultiPurposeCreateOmitsConnectionTypeAndSendsConfiguration
 		Name: "warehouse",
 		Type: "snowflake",
 		Connection: map[string]any{
-			"account": "acct", "username": "shared", "warehouse": "LOAD_WH", "database": "RAW", "password": "pw",
-		},
-		ConnectionOverrides: map[string]any{
-			"catalog": map[string]any{"account": "acct", "username": "obs", "warehouse": "OBS_WH", "password": "pw"},
+			"catalog": map[string]any{"account": "acct", "username": "obs", "warehouse": "OBS_WH"},
 		},
 		Owners: []string{},
 		Configuration: &AssetConfigurationRequest{Etl: &AssetEtlConfigurationRequest{
@@ -75,8 +72,8 @@ func TestAssetsClient_MultiPurposeCreateOmitsConnectionTypeAndSendsConfiguration
 	require.False(t, hasConnectionType, "connectionType must be omitted so the API defaults Snowflake to multi_purpose")
 	require.JSONEq(
 		t,
-		`{"catalog":{"account":"acct","username":"obs","warehouse":"OBS_WH","password":"pw"}}`,
-		string(raw["connectionOverrides"]),
+		`{"catalog":{"account":"acct","username":"obs","warehouse":"OBS_WH"}}`,
+		string(raw["connection"]),
 	)
 	require.JSONEq(
 		t,

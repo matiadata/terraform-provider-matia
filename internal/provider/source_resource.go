@@ -199,7 +199,7 @@ func (r *assetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Sensitive:   true,
 			},
 			"auth_method": schema.StringAttribute{
-				Description: "The authentication method for the connector (e.g. direct). Defaults to direct.",
+				Description: "The authentication method for the connector (e.g. direct, ssh). Required by every connector in the Matia API v1 reference; nothing is sent when it is unset.",
 				Optional:    true,
 			},
 			"is_draft": schema.BoolAttribute{
@@ -363,6 +363,7 @@ func (r *assetResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	updateReq.Connection = toStoredConnection(plan.Type.ValueString(), updateReq.Connection)
 
 	if r.kind == assetKindSource && !plan.AgentID.IsUnknown() && !plan.AgentID.Equal(state.AgentID) {
 		updateReq.Configuration = &client.AssetConfigurationRequest{}

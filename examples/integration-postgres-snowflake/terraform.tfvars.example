@@ -1,7 +1,7 @@
 matia_api_token = "eyJ..."
 
 postgres_hostname    = "your-postgres-hostname"
-postgres_port        = "your-postgres-port"
+postgres_port        = 5432
 postgres_database    = "your-postgres-database"
 postgres_ssl         = false
 postgres_slot        = "matia_slot"
@@ -9,11 +9,11 @@ postgres_publication = "matia_pub"
 postgres_username    = "your-postgres-username"
 postgres_password    = "your-postgres-password"
 
-snowflake_account   = "your-snowflake-account"
-snowflake_database  = "your-snowflake-database"
-snowflake_warehouse = "your-snowflake-warehouse"
-snowflake_role      = "your-snowflake-role"
-snowflake_username  = "your-snowflake-username"
-snowflake_password  = "your-snowflake-password"
+snowflake_account                = "your-snowflake-account"
+snowflake_username               = "your-snowflake-username"
+snowflake_database               = "your-snowflake-database"
+snowflake_warehouse              = "your-snowflake-warehouse"
+snowflake_private_key            = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+snowflake_private_key_passphrase = null
 
 destination_schema = "your-destination-schema-in-snowflake"

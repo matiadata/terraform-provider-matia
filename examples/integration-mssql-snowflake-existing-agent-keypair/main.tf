@@ -33,8 +33,7 @@ resource "matia_asset" "snowflake" {
   type        = "snowflake"
   auth_method = "keyPair"
 
-  # One user for every purpose. The public key is for the dashboard's setup script;
-  # Matia authenticates with the private key.
+  # One user for every purpose.
   credentials = {
     account                = var.snowflake_account
     username               = var.snowflake_username
@@ -42,7 +41,6 @@ resource "matia_asset" "snowflake" {
     warehouse              = var.snowflake_warehouse
     private_key            = var.snowflake_private_key
     private_key_passphrase = var.snowflake_private_key_passphrase
-    public_key             = var.snowflake_public_key
   }
 }
 
@@ -191,11 +189,6 @@ variable "snowflake_private_key_passphrase" {
   sensitive   = true
   default     = null
   description = "Passphrase of the private key, when it is encrypted."
-}
-
-variable "snowflake_public_key" {
-  type        = string
-  description = "Public key registered on the Snowflake user: the base64 body without the BEGIN and END lines."
 }
 
 variable "destination_schema" {

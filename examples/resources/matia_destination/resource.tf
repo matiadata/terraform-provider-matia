@@ -1,29 +1,29 @@
 resource "matia_destination" "example" {
-  name = "example-snowflake-destination"
-  type = "snowflake"
+  name        = "example-bigquery-destination"
+  type        = "bigquery"
+  auth_method = "customServiceAccount"
 
   connection_config = jsonencode({
-    account   = var.snowflake_account
-    database  = "STANDARD_DATABASE"
-    warehouse = "STANDARD_WAREHOUSE"
-    role      = "STANDARD_ROLE"
-    username  = var.snowflake_username
+    project_id          = var.bigquery_project_id
+    location            = "us"
+    isServiceConnection = false
   })
 
   connection_secrets = jsonencode({
-    password = var.snowflake_password
+    private_key  = var.bigquery_private_key
+    client_email = var.bigquery_client_email
   })
 }
 
-variable "snowflake_account" {
+variable "bigquery_project_id" {
   type = string
 }
 
-variable "snowflake_username" {
-  type = string
-}
-
-variable "snowflake_password" {
+variable "bigquery_private_key" {
   type      = string
   sensitive = true
+}
+
+variable "bigquery_client_email" {
+  type = string
 }

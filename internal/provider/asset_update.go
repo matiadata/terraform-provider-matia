@@ -1,6 +1,9 @@
 package provider
 
 import (
+	"maps"
+	"strconv"
+
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -76,4 +79,60 @@ func buildAssetUpdateRequest(
 	}
 
 	return req, changed, diags
+}
+
+type storedConnectionShape struct {
+	names    map[string]string
+	defaults map[string]any
+}
+
+var storedConnectionShapes = map[string]storedConnectionShape{
+	"postgres": {
+		names: map[string]string{
+			"replicationSlot": "slot",
+			"sshHost":         "ssh_host",
+			"sshPort":         "ssh_port",
+			"sshUser":         "ssh_user",
+		},
+		defaults: map[string]any{"ssl": false},
+	},
+	"mysql": {
+		names: map[string]string{
+			"sshHost": "ssh_host",
+			"sshPort": "ssh_port",
+			"sshUser": "ssh_user",
+		},
+		defaults: map[string]any{"flavor": "mysql", "database": ""},
+	},
+}
+
+var storedPortFields = []string{"port", "ssh_port", "vstreamPort"}
+
+// toStoredConnection maps a Postgres or MySQL connection from the field names
+// asset creation takes to the ones asset updates take. An update replaces the
+// stored connection, so a field left under its create name would be dropped.
+func toStoredConnection(assetType string, connection map[string]any) map[string]any {
+	shape, mapped := storedConnectionShapes[assetType]
+	if !mapped || connection == nil {
+		return connection
+	}
+
+	stored := maps.Clone(connection)
+	for from, to := range shape.names {
+		if value, ok := stored[from]; ok {
+			stored[to] = value
+			delete(stored, from)
+		}
+	}
+	for key, value := range shape.defaults {
+		if _, set := stored[key]; !set {
+			stored[key] = value
+		}
+	}
+	for _, key := range storedPortFields {
+		if port, isNumber := stored[key].(float64); isNumber {
+			stored[key] = strconv.FormatFloat(port, 'f', -1, 64)
+		}
+	}
+	return stored
 }

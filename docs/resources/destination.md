@@ -14,33 +14,33 @@ A Matia destination asset - a connector Matia writes data to. A Snowflake asset 
 
 ```terraform
 resource "matia_destination" "example" {
-  name = "example-snowflake-destination"
-  type = "snowflake"
+  name        = "example-bigquery-destination"
+  type        = "bigquery"
+  auth_method = "customServiceAccount"
 
   connection_config = jsonencode({
-    account   = var.snowflake_account
-    database  = "STANDARD_DATABASE"
-    warehouse = "STANDARD_WAREHOUSE"
-    role      = "STANDARD_ROLE"
-    username  = var.snowflake_username
+    project_id          = var.bigquery_project_id
+    location            = "us"
+    isServiceConnection = false
   })
 
   connection_secrets = jsonencode({
-    password = var.snowflake_password
+    private_key  = var.bigquery_private_key
+    client_email = var.bigquery_client_email
   })
 }
 
-variable "snowflake_account" {
+variable "bigquery_project_id" {
   type = string
 }
 
-variable "snowflake_username" {
-  type = string
-}
-
-variable "snowflake_password" {
+variable "bigquery_private_key" {
   type      = string
   sensitive = true
+}
+
+variable "bigquery_client_email" {
+  type = string
 }
 ```
 
@@ -55,7 +55,7 @@ variable "snowflake_password" {
 
 ### Optional
 
-- `auth_method` (String) The authentication method for the connector (e.g. direct). Defaults to direct.
+- `auth_method` (String) The authentication method for the connector (e.g. direct, ssh). Required by every connector in the Matia API v1 reference; nothing is sent when it is unset.
 - `connection_secrets` (String, Sensitive) JSON object with sensitive connector configuration (e.g. passwords, tokens).
 - `description` (String) A human-readable description of the destination asset.
 - `is_draft` (Boolean) Whether the asset is created as a draft. Changing this forces resource replacement.

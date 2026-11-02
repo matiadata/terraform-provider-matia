@@ -4,8 +4,8 @@ resource "matia_integration" "example" {
   destination_id     = var.destination_id
   destination_schema = "raw"
   source_settings = jsonencode({
-    incremental_mode = "Change Stream"
-    max_clients      = 4
+    incrementalMode = "cdc"
+    maxClients      = 4
   })
 }
 
